@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, selectedAntigravityGroup, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
+import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, isBothNotch, selectedAntigravityGroup, suggestedCodexSwitch, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
 
 function account(overrides: Partial<Account> = {}): Account {
   return { id: 'work', label: 'Work', identity: 'work-identity', email: 'work@example.com', plan: 'business', desktop: false, fiveHour: null, weekly: null, updatedAt: null, error: null, ...overrides };
@@ -60,7 +60,7 @@ test('the switch target stays identifiable when desktop and saved cards merge', 
   assert.ok(!isActiveAccount(account({ identity: null }), [desktop], 'desktop'));
 });
 
-test('antigravity notch selection resolves matching group or falls back to the first group', () => {
+test('antigravity and dual-provider notch selection resolves matching group or falls back to the first group', () => {
   const status: AntigravityStatus = {
     email: 'dev@example.com',
     updatedAt: 100,
@@ -73,8 +73,21 @@ test('antigravity notch selection resolves matching group or falls back to the f
   assert.equal(isAntigravityNotch('codex'), false);
   assert.equal(isAntigravityNotch('antigravity'), true);
   assert.equal(isAntigravityNotch('antigravity:claude-and-gpt-models'), true);
+  assert.equal(isBothNotch('both'), true);
+  assert.equal(isBothNotch('both:claude-and-gpt-models'), true);
+  assert.equal(isBothNotch('codex'), false);
   assert.equal(selectedAntigravityGroup(status, 'antigravity')?.id, 'gemini-models');
   assert.equal(selectedAntigravityGroup(status, 'antigravity:claude-and-gpt-models')?.id, 'claude-and-gpt-models');
+  assert.equal(selectedAntigravityGroup(status, 'both:claude-and-gpt-models')?.id, 'claude-and-gpt-models');
   assert.equal(selectedAntigravityGroup(status, 'antigravity:unknown')?.id, 'gemini-models');
   assert.equal(selectedAntigravityGroup({ email: null, groups: [], updatedAt: null, error: null }, 'antigravity'), null);
+});
+
+test('suggestedCodexSwitch recommends healthy connected account when active account is low', () => {
+  const lowActive = account({ id: 'desktop', desktop: true, identity: 'work-id', fiveHour: { remaining: 15, resetsAt: null }, weekly: { remaining: 60, resetsAt: null } });
+  const healthyPersonal = account({ id: 'personal', label: 'Personal', identity: 'personal-id', fiveHour: { remaining: 90, resetsAt: null }, weekly: { remaining: 85, resetsAt: null } });
+  assert.equal(suggestedCodexSwitch([lowActive, healthyPersonal], 'desktop')?.id, 'personal');
+
+  const healthyActive = account({ id: 'desktop', desktop: true, identity: 'work-id', fiveHour: { remaining: 65, resetsAt: null }, weekly: { remaining: 60, resetsAt: null } });
+  assert.equal(suggestedCodexSwitch([healthyActive, healthyPersonal], 'desktop'), null);
 });

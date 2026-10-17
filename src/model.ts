@@ -24,10 +24,38 @@ export interface AntigravityGroup {
   weekly: UsageWindow | null;
 }
 
-export interface AntigravityStatus {
+export interface AntigravityAccount {
+  id: string;
+  label: string;
   email: string | null;
   groups: AntigravityGroup[];
   updatedAt: number | null;
+  error: string | null;
+  active: boolean;
+}
+
+export interface AntigravityStatus {
+  email: string | null;
+  groups: AntigravityGroup[];
+  accounts?: AntigravityAccount[];
+  updatedAt: number | null;
+  error: string | null;
+}
+
+export interface Alert {
+  id: string;
+  title: string;
+  message: string;
+  kind: 'low' | 'reset' | string;
+}
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string | null;
+  releaseUrl: string | null;
+  installerUrl: string | null;
+  updateAvailable: boolean;
+  checking: boolean;
   error: string | null;
 }
 
@@ -35,11 +63,13 @@ export interface Snapshot {
   accounts: Account[];
   activeAccountId: string | null;
   antigravity: AntigravityStatus;
+  alerts: Alert[];
+  update: UpdateStatus;
   refreshing: boolean;
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
   switching: string | null;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean };
 }
 
 export interface SwitchPlan {
@@ -58,14 +88,45 @@ export function isAntigravityNotch(notchSource: string | null | undefined): bool
   return notchSource === 'antigravity' || Boolean(notchSource?.startsWith('antigravity:'));
 }
 
+export function isBothNotch(notchSource: string | null | undefined): boolean {
+  return notchSource === 'both' || Boolean(notchSource?.startsWith('both:'));
+}
+
 export function selectedAntigravityGroup(antigravity: AntigravityStatus | null | undefined, notchSource: string | null | undefined): AntigravityGroup | null {
   if (!antigravity?.groups.length) return null;
-  if (notchSource?.startsWith('antigravity:')) {
-    const id = notchSource.slice('antigravity:'.length);
+  const id = notchSource?.startsWith('antigravity:')
+    ? notchSource.slice('antigravity:'.length)
+    : notchSource?.startsWith('both:')
+      ? notchSource.slice('both:'.length)
+      : null;
+  if (id) {
     const match = antigravity.groups.find(group => group.id === id);
     if (match) return match;
   }
   return antigravity.groups[0];
+}
+
+export function suggestedCodexSwitch(accounts: Account[], activeAccountId: string | null): Account | null {
+  const visible = uniqueAccounts(accounts, activeAccountId);
+  const active = visible.find(a => isActiveAccount(a, accounts, activeAccountId));
+  if (!active) return null;
+  const lowFive = active.fiveHour != null && active.fiveHour.remaining <= 20;
+  const lowWeek = active.weekly != null && active.weekly.remaining <= 20;
+  if (!lowFive && !lowWeek) return null;
+  const candidates = visible.filter(a => !isActiveAccount(a, accounts, activeAccountId) && !a.desktop && !a.error);
+  let best: Account | null = null;
+  let bestScore = -1;
+  for (const candidate of candidates) {
+    const five = candidate.fiveHour?.remaining ?? 0;
+    const week = candidate.weekly?.remaining ?? 0;
+    if (five <= 35 || week <= 35) continue;
+    const score = Math.min(five, week);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 export function percentage(value: number | null | undefined): string {

@@ -69,13 +69,94 @@ pub fn hide_notch(app: AppHandle) {
     let _ = app.emit("panel-collapsed", ());
 }
 
+fn tray_icon_image(attention: bool) -> tauri::image::Image<'static> {
+    let size = 32usize;
+    let mut rgba = vec![0u8; size * size * 4];
+    let badge = if attention { [224u8, 175, 114, 255] } else { [183u8, 200, 177, 255] };
+    for y in 0..size {
+        for x in 0..size {
+            let idx = (y * size + x) * 4;
+            let dx = (x as f32 - 15.5).abs();
+            let dy = (y as f32 - 15.5).abs();
+            let in_box = dx <= 13.5 && dy <= 13.5 && ((dx - 9.5).max(0.0).powi(2) + (dy - 9.5).max(0.0).powi(2) <= 16.0);
+            if in_box {
+                rgba[idx..idx + 4].copy_from_slice(&[32, 34, 33, 255]);
+            }
+            let bar1 = (8..=10).contains(&x) && (12..=22).contains(&y);
+            let bar2 = (14..=16).contains(&x) && (8..=22).contains(&y);
+            let bar3 = (20..=22).contains(&x) && (15..=22).contains(&y);
+            if bar1 || bar2 || bar3 {
+                rgba[idx..idx + 4].copy_from_slice(&badge);
+            }
+            let dot_dist_sq = (x as f32 - 25.0).powi(2) + (y as f32 - 25.0).powi(2);
+            if dot_dist_sq <= 20.0 {
+                rgba[idx..idx + 4].copy_from_slice(&[23, 25, 24, 255]);
+            }
+            if dot_dist_sq <= 11.0 {
+                rgba[idx..idx + 4].copy_from_slice(&badge);
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, size as u32, size as u32)
+}
+
+pub fn update_tray(app: &AppHandle, snapshot: &state::Snapshot) {
+    let Some(tray) = app.tray_by_id("yousage") else { return; };
+    let codex_active = snapshot.accounts.iter().find(|a| Some(a.id.as_str()) == snapshot.active_account_id.as_deref());
+    let codex_5h = codex_active.and_then(|a| a.five_hour.as_ref()).map(|w| format!("{:.0}%", w.remaining.round()));
+    let agy_group = snapshot.antigravity.groups.first();
+    let agy_5h = agy_group.and_then(|g| g.five_hour.as_ref().or(g.weekly.as_ref())).map(|w| format!("{:.0}%", w.remaining.round()));
+    let tooltip = match (codex_5h, agy_5h) {
+        (Some(c), Some(a)) => format!("YouSage · Codex 5h {c} · AGY {a} (Alt+Shift+U)"),
+        (Some(c), None) => format!("YouSage · Codex 5h {c} (Alt+Shift+U)"),
+        (None, Some(a)) => format!("YouSage · Antigravity {a} (Alt+Shift+U)"),
+        (None, None) => "YouSage · Codex & Antigravity usage (Alt+Shift+U)".into(),
+    };
+    let _ = tray.set_tooltip(Some(&tooltip));
+    let low_codex = codex_active.is_some_and(|a| {
+        a.error.is_some()
+            || a.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
+            || a.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
+    });
+    let low_agy = snapshot.antigravity.error.is_some()
+        || snapshot.antigravity.groups.iter().any(|g| {
+            g.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
+                || g.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
+        });
+    let _ = tray.set_icon(Some(tray_icon_image(low_codex || low_agy)));
+}
+
+#[cfg(windows)]
+fn spawn_global_hotkey(app: AppHandle) {
+    std::thread::spawn(move || unsafe {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_NOREPEAT, MOD_SHIFT};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+        if RegisterHotKey(std::ptr::null_mut(), 1, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 0x55) == 0 {
+            return;
+        }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            if msg.message == WM_HOTKEY {
+                let hidden = app.state::<AppState>().config.lock().unwrap().hidden;
+                if hidden {
+                    show(&app);
+                } else if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = app.emit("hotkey-toggle", ());
+                }
+            }
+        }
+    });
+}
+
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item = MenuItem::with_id(app, "show", "Show notch", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "Show notch (Alt+Shift+U)", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide notch", true, None::<&str>)?;
     let refresh_item = MenuItem::with_id(app, "refresh", "Refresh usage", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit YouSage", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &refresh_item, &quit_item])?;
-    let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex & Antigravity usage").menu(&menu).show_menu_on_left_click(false)
+    let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex & Antigravity usage (Alt+Shift+U)").menu(&menu).show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { show(tray.app_handle()); }
         })
@@ -84,8 +165,10 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             "refresh" => { tauri::async_runtime::spawn(state::refresh_all(app.clone())); },
             "quit" => { let _ = app.state::<AppState>().persist(); app.exit(0); }, _ => {}
         });
-    if let Some(icon) = app.default_window_icon() { tray = tray.icon(icon.clone()); }
+    tray = tray.icon(tray_icon_image(false));
     tray.build(app)?;
+    #[cfg(windows)]
+    spawn_global_hotkey(app.clone());
     let _ = set_expanded(app.clone(), false, COMPACT);
     let state = app.state::<AppState>();
     if !state.config.lock().unwrap().hidden {
