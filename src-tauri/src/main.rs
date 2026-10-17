@@ -7,6 +7,7 @@ mod switching;
 mod model;
 mod rpc;
 mod state;
+mod claude;
 
 use tauri::Manager;
 
@@ -21,7 +22,7 @@ fn main() {
             state::check_for_updates, state::open_release_url,
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings,
-            desktop::set_expanded, desktop::hide_notch,
+            desktop::set_expanded, desktop::hide_notch, desktop::start_notch_drag,
             switching::prepare_switch, switching::switch_account,
         ])
         .setup(|app| {

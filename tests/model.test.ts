@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, isBothNotch, selectedAntigravityGroup, suggestedCodexSwitch, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
+import { effectiveNotchSource, providerColor } from '../src/model.ts';
+
+test('hidden subscriptions fall back without losing the preferred source or group', () => {
+  assert.equal(effectiveNotchSource('both:gemini', ['codex']), 'antigravity:gemini');
+  assert.equal(effectiveNotchSource('both:gemini', ['antigravity']), 'codex');
+  assert.equal(effectiveNotchSource('both:gemini', ['codex', 'antigravity']), 'claude');
+  assert.equal(effectiveNotchSource('claude', ['claude']), 'codex');
+  assert.equal(effectiveNotchSource('claude', ['codex', 'antigravity', 'claude']), 'none');
+  assert.equal(effectiveNotchSource('claude', []), 'claude');
+});
+
+test('provider accents accept custom hex colors and reject invalid styles', () => {
+  assert.equal(providerColor({ codex: '#FF66aa' }, 'codex'), '#FF66aa');
+  assert.equal(providerColor({ codex: 'red;display:none' }, 'codex'), '#b7c8b1');
+  assert.equal(providerColor(undefined, 'claude'), '#d99a7c');
+});
 
 function account(overrides: Partial<Account> = {}): Account {
   return { id: 'work', label: 'Work', identity: 'work-identity', email: 'work@example.com', plan: 'business', desktop: false, fiveHour: null, weekly: null, updatedAt: null, error: null, ...overrides };

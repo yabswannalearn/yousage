@@ -1,4 +1,4 @@
-use crate::{model::{evaluate_alerts, parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, Point, UpdateStatus}, rpc::{self, Rpc}};
+use crate::{model::{evaluate_alerts, parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, ClaudeStatus, ProviderColors, Point, UpdateStatus}, rpc::{self, Rpc}};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, fs, path::PathBuf, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}, time::{SystemTime, UNIX_EPOCH}};
@@ -22,6 +22,8 @@ pub struct Config {
     pub anchor: Option<Point>,
     pub notch_source: String,
     pub notifications_enabled: bool,
+    pub provider_colors: ProviderColors,
+    pub hidden_providers: Vec<String>,
 }
 
 impl Default for Config {
@@ -36,6 +38,8 @@ impl Default for Config {
             anchor: None,
             notch_source: "codex".into(),
             notifications_enabled: true,
+            provider_colors: ProviderColors::default(),
+            hidden_providers: vec![],
         }
     }
 }
@@ -47,6 +51,8 @@ pub struct Settings {
     pub refresh_seconds: u64,
     pub notch_source: String,
     pub notifications_enabled: bool,
+    pub provider_colors: ProviderColors,
+    pub hidden_providers: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -58,6 +64,7 @@ pub struct Snapshot {
     pub accounts: Vec<Account>,
     pub active_account_id: Option<String>,
     pub antigravity: AntigravityStatus,
+    pub claude: ClaudeStatus,
     pub alerts: Vec<Alert>,
     pub update: UpdateStatus,
     pub refreshing: bool,
@@ -80,6 +87,8 @@ pub struct AppState {
     pub resizing: AtomicBool,
     pub resize_generation: AtomicU64,
     pub window: Mutex<crate::desktop::WindowState>,
+    pub claude_next_refresh: AtomicU64,
+    pub claude_token_fingerprint: Mutex<Option<[u8; 32]>>,
 }
 
 impl AppState {
@@ -90,16 +99,20 @@ impl AppState {
         let mut config: Config = fs::read(directory.join("settings.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         config.refresh_seconds = config.refresh_seconds.clamp(30, 600);
         if config.notch_source.is_empty() { config.notch_source = "codex".into(); }
+        if !config.provider_colors.valid() { config.provider_colors = ProviderColors::default(); }
         let mut cached: Vec<Account> = fs::read(directory.join("usage-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         cached.retain(|a| a.desktop || config.profiles.iter().any(|p| p.id == a.id));
         for account in &mut cached { account.error = Some("Checking latest usage…".into()); }
         let mut antigravity: AntigravityStatus = fs::read(directory.join("antigravity-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         antigravity.accounts.retain(|a| a.active || config.antigravity_profiles.iter().any(|p| p.id == a.id));
         if !antigravity.groups.is_empty() { antigravity.error = Some("Checking latest usage…".into()); }
+        let mut claude: ClaudeStatus = fs::read(directory.join("claude-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
+        if claude.updated_at.is_some() { claude.error = Some("Checking latest usage…".into()); }
         let snapshot = Snapshot {
             accounts: cached,
             active_account_id: None,
             antigravity,
+            claude,
             alerts: vec![],
             update: UpdateStatus { current_version: env!("CARGO_PKG_VERSION").into(), ..UpdateStatus::default() },
             refreshing: false,
@@ -111,12 +124,16 @@ impl AppState {
                 refresh_seconds: config.refresh_seconds,
                 notch_source: config.notch_source.clone(),
                 notifications_enabled: config.notifications_enabled,
+                provider_colors: config.provider_colors.clone(),
+                hidden_providers: config.hidden_providers.clone(),
             },
         };
         Ok(Self {
             config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(HashMap::new()), directory, persist_guard: Mutex::new(()),
             io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), switch_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
             resizing: AtomicBool::new(false), resize_generation: AtomicU64::new(0), window: Mutex::new(crate::desktop::WindowState::default()),
+            claude_next_refresh: AtomicU64::new(0),
+            claude_token_fingerprint: Mutex::new(None),
         })
     }
 
@@ -128,7 +145,9 @@ impl AppState {
         let accounts = serde_json::to_vec(&snapshot.accounts).map_err(|_| "Could not save usage.")?;
         atomic_write(&self.directory.join("usage-cache.json"), &accounts)?;
         let antigravity = serde_json::to_vec(&snapshot.antigravity).map_err(|_| "Could not save Antigravity usage.")?;
-        atomic_write(&self.directory.join("antigravity-cache.json"), &antigravity)
+        atomic_write(&self.directory.join("antigravity-cache.json"), &antigravity)?;
+        let claude = serde_json::to_vec(&snapshot.claude).map_err(|_| "Could not save Claude usage.")?;
+        atomic_write(&self.directory.join("claude-cache.json"), &claude)
     }
 
     pub fn emit(&self, app: &AppHandle) {
@@ -191,6 +210,42 @@ pub async fn refresh_all(app: AppHandle) {
     let Ok(_guard) = state.io.try_lock() else { return };
     state.snapshot.lock().unwrap().refreshing = true;
     state.emit(&app);
+    // Claude's account-metadata endpoint has a separate, conservative cadence.
+    // Start it alongside the CLI providers so a slow CLI cannot delay it.
+    let claude_app = app.clone();
+    let claude_refresh = tauri::async_runtime::spawn(async move { crate::claude::refresh(&claude_app).await });
+    refresh_cli_providers(&app).await;
+    let _ = claude_refresh.await;
+    let new_alerts = {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        snapshot.refreshing = false;
+        if snapshot.settings.notifications_enabled {
+            let mut history = state.alert_history.lock().unwrap();
+            let hidden = &snapshot.settings.hidden_providers;
+            let accounts = if hidden.iter().any(|p| p == "codex") { &[][..] } else { &snapshot.accounts[..] };
+            let empty_agy = AntigravityStatus::default();
+            let antigravity = if hidden.iter().any(|p| p == "antigravity") { &empty_agy } else { &snapshot.antigravity };
+            let empty_claude = ClaudeStatus::default();
+            let claude = if hidden.iter().any(|p| p == "claude") { &empty_claude } else { &snapshot.claude };
+            let evaluated = evaluate_alerts(&mut history, accounts, antigravity, claude);
+            for alert in &evaluated {
+                snapshot.alerts.retain(|a| a.id != alert.id);
+                snapshot.alerts.push(alert.clone());
+            }
+            evaluated
+        } else {
+            vec![]
+        }
+    };
+    for alert in new_alerts {
+        let _ = app.emit("usage-alert", alert);
+    }
+    state.emit(&app);
+    let _ = state.persist();
+}
+
+async fn refresh_cli_providers(app: &AppHandle) {
+    let state = app.state::<AppState>();
     let config = state.config.lock().unwrap().clone();
     let mut profiles = vec![("desktop".to_owned(), config.desktop_label.unwrap_or_default(), rpc::desktop_home(), true)];
     for profile in config.profiles {
@@ -308,27 +363,7 @@ pub async fn refresh_all(app: AppHandle) {
         };
         agy_accounts.push(acc);
     }
-    let new_alerts = {
-        let mut snapshot = state.snapshot.lock().unwrap();
-        snapshot.antigravity.accounts = agy_accounts;
-        snapshot.refreshing = false;
-        if snapshot.settings.notifications_enabled {
-            let mut history = state.alert_history.lock().unwrap();
-            let evaluated = evaluate_alerts(&mut history, &snapshot.accounts, &snapshot.antigravity);
-            for alert in &evaluated {
-                snapshot.alerts.retain(|a| a.id != alert.id);
-                snapshot.alerts.push(alert.clone());
-            }
-            evaluated
-        } else {
-            vec![]
-        }
-    };
-    for alert in new_alerts {
-        let _ = app.emit("usage-alert", alert);
-    }
-    state.emit(&app);
-    let _ = state.persist();
+    state.snapshot.lock().unwrap().antigravity.accounts = agy_accounts;
 }
 
 #[tauri::command]
@@ -591,6 +626,7 @@ fn valid_slug(id: &str) -> bool {
 
 fn valid_notch_source(value: &str) -> bool {
     value == "codex"
+        || value == "claude"
         || value == "antigravity"
         || value == "both"
         || value.strip_prefix("antigravity:").is_some_and(valid_slug)
@@ -604,31 +640,67 @@ pub fn update_settings(
     refresh_seconds: u64,
     notch_source: Option<String>,
     notifications_enabled: Option<bool>,
+    provider_colors: Option<ProviderColors>,
+    hidden_providers: Option<Vec<String>>,
 ) -> Result<(), String> {
     if !(30..=600).contains(&refresh_seconds) { return Err("Choose a refresh interval between 30 seconds and 10 minutes.".into()) }
     if let Some(ref source) = notch_source {
         if !valid_notch_source(source) { return Err("Choose a valid notch preview source.".into()) }
     }
+    if provider_colors.as_ref().is_some_and(|colors| !colors.valid()) { return Err("Choose a valid six-digit hex color for each subscription.".into()) }
+    if hidden_providers.as_ref().is_some_and(|hidden| hidden.iter().any(|p| !["codex", "antigravity", "claude"].contains(&p.as_str()))) { return Err("Choose a valid subscription to hide.".into()) }
     if !cfg!(debug_assertions) {
         if start_with_windows { app.autolaunch().enable() } else { app.autolaunch().disable() }
             .map_err(|_| "Windows could not update the startup setting.")?;
     }
     let state = app.state::<AppState>();
-    let (resolved_source, resolved_notifications) = {
+    let (resolved_source, resolved_notifications, resolved_colors, resolved_hidden) = {
         let mut config = state.config.lock().unwrap();
         config.start_with_windows = start_with_windows;
         config.refresh_seconds = refresh_seconds;
         if let Some(source) = notch_source { config.notch_source = source; }
         if let Some(enabled) = notifications_enabled { config.notifications_enabled = enabled; }
-        (config.notch_source.clone(), config.notifications_enabled)
+        if let Some(colors) = provider_colors { config.provider_colors = colors; }
+        if let Some(hidden) = hidden_providers { config.hidden_providers = hidden; }
+        (config.notch_source.clone(), config.notifications_enabled, config.provider_colors.clone(), config.hidden_providers.clone())
     };
     state.snapshot.lock().unwrap().settings = Settings {
         start_with_windows,
         refresh_seconds,
         notch_source: resolved_source,
         notifications_enabled: resolved_notifications,
+        provider_colors: resolved_colors,
+        hidden_providers: resolved_hidden,
     };
     state.persist()?;
     state.emit(&app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_settings_gain_visible_subscriptions_and_default_colors() {
+        let config: Config = serde_json::from_str(r##"{"notchSource":"both:gemini","desktopLabel":"Personal"}"##).unwrap();
+        assert_eq!(config.notch_source, "both:gemini");
+        assert_eq!(config.desktop_label.as_deref(), Some("Personal"));
+        assert!(config.hidden_providers.is_empty());
+        assert_eq!(config.provider_colors, ProviderColors::default());
+    }
+
+    #[test]
+    fn colors_and_hidden_subscriptions_survive_saved_settings() {
+        let mut config = Config::default();
+        config.provider_colors.codex = "#ff66aa".into();
+        config.hidden_providers = vec!["claude".into(), "antigravity".into()];
+        let restored: Config = serde_json::from_slice(&serde_json::to_vec(&config).unwrap()).unwrap();
+        assert_eq!(restored.provider_colors.codex, "#ff66aa");
+        assert_eq!(restored.hidden_providers, config.hidden_providers);
+        assert!(valid_notch_source("claude"));
+        assert!(!valid_notch_source("none"));
+        config.provider_colors.claude = "#fff;display:none".into();
+        assert!(!config.provider_colors.valid());
+    }
 }

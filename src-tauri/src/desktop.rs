@@ -8,7 +8,30 @@ const WIDTH: f64 = 344.0;
 const COMPACT: f64 = 80.0;
 
 #[derive(Default)]
-pub struct WindowState { pub expanded: bool, pub upward: bool }
+pub struct WindowState { pub expanded: bool, pub upward: bool, pub dragging: bool }
+
+#[tauri::command]
+pub fn start_notch_drag(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("The notch window is unavailable.")?;
+    app.state::<AppState>().window.lock().unwrap().dragging = true;
+    if window.start_dragging().is_err() {
+        app.state::<AppState>().window.lock().unwrap().dragging = false;
+        return Err("Could not move the notch.".into());
+    }
+    // Windows owns the mouse during a native move loop. Its focus changes must
+    // not collapse the panel, and the webview may not receive pointerup.
+    tauri::async_runtime::spawn(async move {
+        #[cfg(windows)]
+        while unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(1) } < 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        app.state::<AppState>().window.lock().unwrap().dragging = false;
+        let _ = app.state::<AppState>().persist();
+        let _ = app.emit("notch-drag-finished", ());
+    });
+    Ok(())
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,28 +125,32 @@ fn tray_icon_image(attention: bool) -> tauri::image::Image<'static> {
 
 pub fn update_tray(app: &AppHandle, snapshot: &state::Snapshot) {
     let Some(tray) = app.tray_by_id("yousage") else { return; };
-    let codex_active = snapshot.accounts.iter().find(|a| Some(a.id.as_str()) == snapshot.active_account_id.as_deref());
+    let visible = |provider: &str| !snapshot.settings.hidden_providers.iter().any(|p| p == provider);
+    let codex_active = snapshot.accounts.iter().find(|a| visible("codex") && Some(a.id.as_str()) == snapshot.active_account_id.as_deref());
     let codex_5h = codex_active.and_then(|a| a.five_hour.as_ref()).map(|w| format!("{:.0}%", w.remaining.round()));
-    let agy_group = snapshot.antigravity.groups.first();
+    let agy_group = snapshot.antigravity.groups.first().filter(|_| visible("antigravity"));
     let agy_5h = agy_group.and_then(|g| g.five_hour.as_ref().or(g.weekly.as_ref())).map(|w| format!("{:.0}%", w.remaining.round()));
-    let tooltip = match (codex_5h, agy_5h) {
-        (Some(c), Some(a)) => format!("YouSage · Codex 5h {c} · AGY {a} (Alt+Shift+U)"),
-        (Some(c), None) => format!("YouSage · Codex 5h {c} (Alt+Shift+U)"),
-        (None, Some(a)) => format!("YouSage · Antigravity {a} (Alt+Shift+U)"),
-        (None, None) => "YouSage · Codex & Antigravity usage (Alt+Shift+U)".into(),
-    };
+    let claude_5h = snapshot.claude.five_hour.as_ref().filter(|_| visible("claude")).map(|w| format!("{:.0}%", w.remaining.round()));
+    let mut readings = vec!["YouSage".to_owned()];
+    if let Some(c) = codex_5h { readings.push(format!("Codex 5h {c}")); }
+    if let Some(a) = agy_5h { readings.push(format!("AGY {a}")); }
+    if let Some(c) = claude_5h { readings.push(format!("Claude 5h {c}")); }
+    let tooltip = format!("{} (Alt+Shift+U)", readings.join(" · "));
     let _ = tray.set_tooltip(Some(&tooltip));
     let low_codex = codex_active.is_some_and(|a| {
         a.error.is_some()
             || a.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
             || a.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
     });
-    let low_agy = snapshot.antigravity.error.is_some()
+    let low_agy = visible("antigravity") && (snapshot.antigravity.error.is_some()
         || snapshot.antigravity.groups.iter().any(|g| {
             g.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
                 || g.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
-        });
-    let _ = tray.set_icon(Some(tray_icon_image(low_codex || low_agy)));
+        }));
+    let low_claude = visible("claude") && (snapshot.claude.error.is_some()
+        || snapshot.claude.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
+        || snapshot.claude.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0));
+    let _ = tray.set_icon(Some(tray_icon_image(low_codex || low_agy || low_claude)));
 }
 
 #[cfg(windows)]
@@ -187,7 +214,8 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     let state = app.state::<AppState>();
     match event {
         WindowEvent::CloseRequested { api, .. } => { api.prevent_close(); hide_notch(app.clone()); }
-        WindowEvent::Focused(false) if !state.resizing.load(Ordering::SeqCst) => { let _ = app.emit("collapse-requested", ()); }
+        WindowEvent::Focused(true) => { let _ = app.emit("notch-focused", ()); }
+        WindowEvent::Focused(false) if !state.resizing.load(Ordering::SeqCst) && !state.window.lock().unwrap().dragging => { let _ = app.emit("collapse-requested", ()); }
         WindowEvent::Moved(position) if !state.resizing.load(Ordering::SeqCst) => {
             let placement = state.window.lock().unwrap();
             let height = window.outer_size().map(|s| s.height as i32).unwrap_or(80);
