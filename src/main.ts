@@ -2,13 +2,13 @@ import './style.css';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { escapeHtml as esc, freshness, percentage, resetLabel, uniqueAccounts, isActiveAccount, type Account, type Snapshot, type SwitchPlan, type UsageWindow } from './model';
+import { escapeHtml as esc, freshness, percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, selectedAntigravityGroup, type Account, type AntigravityGroup, type Snapshot, type SwitchPlan, type UsageWindow } from './model';
 
 const native = isTauri();
 const params = new URLSearchParams(location.search);
 const preview = !native && import.meta.env.DEV && params.has('preview');
 const root = document.querySelector<HTMLElement>('#app')!;
-let snapshot: Snapshot = { accounts: [], activeAccountId: null, refreshing: false, desktopError: null, login: null, switching: null, settings: { startWithWindows: true, refreshSeconds: 60 } };
+let snapshot: Snapshot = { accounts: [], activeAccountId: null, antigravity: { email: null, groups: [], updatedAt: null, error: null }, refreshing: false, desktopError: null, login: null, switching: null, settings: { startWithWindows: true, refreshSeconds: 60, notchSource: 'codex' } };
 let expanded = false;
 let upward = false;
 let settingsOpen = false;
@@ -57,14 +57,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return undefined as T;
   }
   if (command === 'refresh_usage') {
-    snapshot.accounts.forEach(account => { account.updatedAt = Date.now() / 1000; });
+    const now = Date.now() / 1000;
+    snapshot.accounts.forEach(account => { account.updatedAt = now; });
+    snapshot.antigravity.updatedAt = now;
   } else if (command === 'rename_account') {
     const account = snapshot.accounts.find(a => a.id === args?.id);
     if (account) account.label = String(args?.label);
   } else if (command === 'disconnect_account') {
     snapshot.accounts = snapshot.accounts.filter(account => account.id !== args?.id);
   } else if (command === 'update_settings') {
-    snapshot.settings = { startWithWindows: Boolean(args?.startWithWindows), refreshSeconds: Number(args?.refreshSeconds) };
+    snapshot.settings = {
+      startWithWindows: Boolean(args?.startWithWindows),
+      refreshSeconds: Number(args?.refreshSeconds),
+      notchSource: typeof args?.notchSource === 'string' ? args.notchSource : snapshot.settings.notchSource,
+    };
   } else if (command === 'connect_account') {
     throw new Error('Account sign-in is available in the Windows app. This screen uses preview data.');
   } else if (command === 'hide_notch') {
@@ -88,11 +94,27 @@ function limitRow(label: string, window: UsageWindow | null) {
 
 function accountCard(account: Account) {
   const active = isActiveAccount(account, snapshot.accounts, snapshot.activeAccountId);
+  const inNotch = active && !isAntigravityNotch(snapshot.settings.notchSource);
   const initial = esc((account.label || account.email || 'C').charAt(0).toUpperCase());
   const id = esc(account.id);
+  const notchAction = active && !inNotch ? `<button type="button" class="text-button notch-pill" data-action="set-notch" data-source="codex">Show in notch</button>` : '';
   const controls = managing === account.id ? `<form class="manage-form" data-form="rename" data-id="${id}"><label class="field-label" for="name-${id}">Account name</label><div class="inline-input"><input id="name-${id}" name="label" value="${esc(account.label)}" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button></div><div class="manage-actions">${account.desktop ? '<span class="fine-print">Sign-in is managed in Codex.</span>' : `<button type="button" class="text-button" data-action="reconnect" data-id="${id}">Sign in again</button><button type="button" class="text-button danger" data-action="disconnect" data-id="${id}">${disconnectConfirmation === account.id ? 'Confirm disconnect' : 'Disconnect'}</button>`}</div></form>` : '';
   const switchButton = !active && !account.desktop ? `<button class="switch-account-button" data-action="prepare-switch" data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('swap')}<span>${preparingSwitch === account.id ? 'Checking Codex…' : 'Switch to this account'}</span><span aria-hidden="true">→</span></button>` : '';
-  return `<article class="account-card ${active ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(account.label)}${active ? '<span class="active-badge">Active</span>' : ''}</div><div class="account-email" title="${esc(account.email ?? '')}">${esc(account.email ?? 'ChatGPT account')}${account.plan ? `<span class="plan"> · ${esc(account.plan)}</span>` : ''}</div></div>${iconButton('manage', 'more', 'Manage account', `data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan ? 'disabled' : ''}`)}</div><div class="limits">${limitRow('5 hour', account.fiveHour)}${limitRow('Weekly', account.weekly)}</div><div class="account-status ${account.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(account))}</div>${account.error ? `<p class="account-error">${esc(account.error)}</p>` : ''}${controls}${switchButton}</article>`;
+  return `<article class="account-card ${active ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(account.label)}${active ? `<span class="active-badge">${inNotch ? 'Active · In notch' : 'Active'}</span>` : ''}${notchAction}</div><div class="account-email" title="${esc(account.email ?? '')}">${esc(account.email ?? 'ChatGPT account')}${account.plan ? `<span class="plan"> · ${esc(account.plan)}</span>` : ''}</div></div>${iconButton('manage', 'more', 'Manage account', `data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan ? 'disabled' : ''}`)}</div><div class="limits">${limitRow('5 hour', account.fiveHour)}${limitRow('Weekly', account.weekly)}</div><div class="account-status ${account.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(account))}</div>${account.error ? `<p class="account-error">${esc(account.error)}</p>` : ''}${controls}${switchButton}</article>`;
+}
+
+function antigravityGroupCard(group: AntigravityGroup, selectedId: string | undefined) {
+  const inNotch = isAntigravityNotch(snapshot.settings.notchSource) && selectedId === group.id;
+  const initial = esc((group.label || 'A').charAt(0).toUpperCase());
+  const source = `antigravity:${esc(group.id)}`;
+  const subtitle = group.description ?? snapshot.antigravity.email ?? 'Antigravity model group';
+  return `<article class="account-card ${inNotch ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(group.label)}${inNotch ? '<span class="active-badge">In notch</span>' : `<button type="button" class="text-button notch-pill" data-action="set-notch" data-source="${source}">Show in notch</button>`}</div><div class="account-email" title="${esc(subtitle)}">${esc(subtitle)}</div></div></div><div class="limits">${limitRow('5 hour', group.fiveHour)}${limitRow('Weekly', group.weekly)}</div></article>`;
+}
+
+function antigravitySection() {
+  const { antigravity } = snapshot;
+  const selected = selectedAntigravityGroup(antigravity, snapshot.settings.notchSource);
+  return `<section class="provider-section" aria-label="Antigravity usage"><div class="section-divider"><div><span class="eyebrow">ANTIGRAVITY</span><div class="provider-heading"><h2>Model quotas<span class="account-count">${antigravity.groups.length}</span></h2><span class="account-status provider-status ${antigravity.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(antigravity))}</span></div>${antigravity.email ? `<div class="provider-email">${esc(antigravity.email)}</div>` : ''}</div></div>${antigravity.groups.map(group => antigravityGroupCard(group, selected?.id)).join('')}${antigravity.groups.length === 0 ? `<div class="empty-state compact-empty"><h2>${snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity quota'}</h2><p>${esc(antigravity.error ?? 'Sign in with Antigravity CLI (agy) to view model quotas.')}</p></div>` : antigravity.error ? `<p class="account-error">${esc(antigravity.error)}</p>` : ''}</section>`;
 }
 
 function switchPanel() {
@@ -104,7 +126,13 @@ function switchPanel() {
 }
 
 function settingsPanel() {
-  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">YouSage 0.1</span></div><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${snapshot.settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${snapshot.settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><p class="fine-print">Usage keeps updating while the notch is hidden.</p></section>`;
+  const { antigravity, settings } = snapshot;
+  const activeGroup = selectedAntigravityGroup(antigravity, settings.notchSource);
+  const currentSource = isAntigravityNotch(settings.notchSource) ? (activeGroup ? `antigravity:${activeGroup.id}` : 'antigravity') : 'codex';
+  const antigravityOptions = antigravity.groups.length
+    ? antigravity.groups.map(group => `<option value="antigravity:${esc(group.id)}" ${currentSource === `antigravity:${group.id}` ? 'selected' : ''}>Antigravity · ${esc(group.label)}</option>`).join('')
+    : `<option value="antigravity" ${currentSource === 'antigravity' ? 'selected' : ''}>Antigravity</option>`;
+  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">YouSage 0.1</span></div><label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="codex" ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${antigravityOptions}</select></label><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><p class="fine-print">Usage keeps updating while the notch is hidden.</p></section>`;
 }
 
 function addPanel() {
@@ -122,9 +150,15 @@ function render() {
   const accounts = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId);
   const desktop = snapshot.accounts.find(account => account.id === snapshot.activeAccountId);
   const active = accounts.find(account => account.id === snapshot.activeAccountId || (account.identity && account.identity === desktop?.identity));
-  const title = snapshot.switching ? 'Switching account…' : active?.label ?? (snapshot.refreshing ? 'Checking Codex' : 'No active account');
+  const useAntigravity = isAntigravityNotch(snapshot.settings.notchSource);
+  const notchGroup = selectedAntigravityGroup(snapshot.antigravity, snapshot.settings.notchSource);
+  const title = snapshot.switching ? 'Switching account…' : useAntigravity ? (notchGroup?.label ?? (snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity')) : (active?.label ?? (snapshot.refreshing ? 'Checking Codex' : 'No active account'));
+  const subtitle = preview ? 'Preview data' : useAntigravity ? (snapshot.antigravity.error ? 'Last known usage' : 'Antigravity remaining') : (active?.error ? 'Last known usage' : 'Codex remaining');
+  const notchFiveHour = useAntigravity ? (notchGroup?.fiveHour ?? null) : (active?.fiveHour ?? null);
+  const notchWeekly = useAntigravity ? (notchGroup?.weekly ?? null) : (active?.weekly ?? null);
+  const notchTooltip = useAntigravity ? (snapshot.antigravity.error ?? 'Click to expand · drag to move') : (active?.error ?? snapshot.desktopError ?? 'Click to expand · drag to move');
   root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${transition ? 'transitioning' : ''}`;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(active?.error ?? snapshot.desktopError ?? 'Click to expand · drag to move')}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${preview ? 'Preview data' : active?.error ? 'Last known usage' : 'Codex remaining'}</span></span><span class="compact-readings">${smallReading('5h', active?.fiveHour ?? null)}${smallReading('Week', active?.weekly ?? null)}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Connected accounts"><div class="panel-scroll"><header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'USAGE REMAINING'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${switchPanel()}${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer"><button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button><div class="footer-tools">${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${subtitle}</span></span><span class="compact-readings">${smallReading('5h', notchFiveHour)}${smallReading('Week', notchWeekly)}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll"><header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${switchPanel()}${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}${antigravitySection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer"><button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button><div class="footer-tools">${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   if (scroll) scroll.scrollTop = scrollTop;
   if (preserved) {
@@ -228,6 +262,11 @@ root.addEventListener('click', event => {
     case 'prepare-switch': if (id) void attempt(() => prepareSwitch(id)); break;
     case 'confirm-switch': void attempt(confirmSwitch); break;
     case 'cancel-switch': switchPlan = null; render(); break;
+    case 'set-notch': {
+      const source = target.dataset.source;
+      if (source) void attempt(() => call('update_settings', { startWithWindows: snapshot.settings.startWithWindows, refreshSeconds: snapshot.settings.refreshSeconds, notchSource: source }));
+      break;
+    }
   }
 });
 
@@ -242,10 +281,11 @@ root.addEventListener('submit', event => {
 
 root.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
-  if (!['startup', 'refresh-interval'].includes(input.id)) return;
+  if (!['startup', 'refresh-interval', 'notch-source'].includes(input.id)) return;
   const start = root.querySelector<HTMLInputElement>('#startup')!.checked;
   const seconds = Number(root.querySelector<HTMLSelectElement>('#refresh-interval')!.value);
-  void attempt(() => call('update_settings', { startWithWindows: start, refreshSeconds: seconds }));
+  const notchSource = root.querySelector<HTMLSelectElement>('#notch-source')?.value ?? snapshot.settings.notchSource;
+  void attempt(() => call('update_settings', { startWithWindows: start, refreshSeconds: seconds, notchSource }));
 });
 
 root.addEventListener('pointerdown', event => {
@@ -275,13 +315,23 @@ async function start() {
         { id: 'desktop', label: 'Work', email: 'work@example.com', plan: 'business', identity: 'demo-work', fiveHour: { remaining: 42, resetsAt: now + 7200 }, weekly: { remaining: 70, resetsAt: now + 432000 }, updatedAt: now, error: null, desktop: true },
         { id: 'preview-personal', label: 'Personal', email: 'personal@example.com', plan: 'plus', identity: 'demo-personal', fiveHour: { remaining: 88, resetsAt: now + 10800 }, weekly: { remaining: 16, resetsAt: now + 172800 }, updatedAt: now, error: null, desktop: false },
       ],
+      antigravity: {
+        email: 'developer@example.com',
+        updatedAt: now,
+        error: null,
+        groups: [
+          { id: 'gemini-models', label: 'Gemini Models', description: 'Models within this group: Gemini Flash, Gemini Pro', fiveHour: { remaining: 100, resetsAt: now + 14400 }, weekly: { remaining: 100, resetsAt: now + 518400 } },
+          { id: 'claude-and-gpt-models', label: 'Claude and GPT models', description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS', fiveHour: { remaining: 97, resetsAt: now + 5760 }, weekly: { remaining: 83, resetsAt: now + 496800 } },
+          { id: 'gemini-4-argon', label: 'Gemini 4 Argon', description: 'Separate weekly quota for paid Pro plans', fiveHour: null, weekly: { remaining: 90, resetsAt: now + 597600 } },
+        ],
+      },
     };
     render();
     if (params.has('expanded')) await toggle(true);
     return;
   }
   if (!native) {
-    root.innerHTML = '<div class="browser-message"><h1>YouSage</h1><p>Open the Windows desktop app to view your Codex accounts.</p><a href="?preview=1&expanded=1">Open the interface preview</a></div>';
+    root.innerHTML = '<div class="browser-message"><h1>YouSage</h1><p>Open the Windows desktop app to view your Codex and Antigravity usage.</p><a href="?preview=1&expanded=1">Open the interface preview</a></div>';
     document.documentElement.classList.add('browser-preview');
     return;
   }

@@ -94,3 +94,57 @@ impl Rpc {
         }).await.map_err(|_| "Codex took too long to respond. Retry when your connection is available.".to_owned())?
     }
 }
+
+pub fn antigravity_executable() -> PathBuf {
+    if let Some(path) = std::env::var_os("YOUSAGE_ANTIGRAVITY_BIN") { return path.into() }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let home = PathBuf::from(home);
+        for path in [
+            home.join("AppData/Local/agy/bin/agy.exe"),
+            home.join("AppData/Local/Programs/Antigravity/bin/agy.exe"),
+        ] {
+            if path.is_file() { return path }
+        }
+    }
+    PathBuf::from(if cfg!(windows) { "agy.exe" } else { "agy" })
+}
+
+pub fn antigravity_home() -> PathBuf {
+    std::env::var_os("GEMINI_CLI_HOME").map(PathBuf::from).unwrap_or_else(|| {
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default();
+        PathBuf::from(home).join(".gemini")
+    })
+}
+
+pub fn antigravity_email() -> Option<String> {
+    let bytes = std::fs::read(antigravity_home().join("google_accounts.json")).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    value["active"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+pub async fn read_antigravity() -> Result<crate::model::AntigravityStatus, String> {
+    let mut command = Command::new(antigravity_executable());
+    command.args(["-p", "/usage", "--output-format", "json"])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW: never flash a console.
+    let output = timeout(Duration::from_secs(25), command.output()).await
+        .map_err(|_| "Antigravity took too long to respond. Retry when your connection is available.".to_owned())?
+        .map_err(|_| "Antigravity CLI (agy) could not be started. Install Antigravity or check your PATH.".to_owned())?;
+    if !output.status.success() {
+        return Err("Could not fetch Antigravity usage. Sign in with 'agy' or check your connection.".to_owned())
+    }
+    let response: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Could not read the Antigravity usage response.".to_owned())?;
+    if response["status"].as_str() != Some("SUCCESS") {
+        return Err("Antigravity could not complete the usage check. Sign in with 'agy' and retry.".to_owned())
+    }
+    let groups = crate::model::parse_antigravity_usage(&response);
+    let error = groups.is_empty().then(|| "Antigravity did not return model quota groups for this account.".to_owned());
+    Ok(crate::model::AntigravityStatus {
+        email: antigravity_email(),
+        groups,
+        updated_at: Some(crate::state::now()),
+        error,
+    })
+}

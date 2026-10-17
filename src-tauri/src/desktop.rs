@@ -75,7 +75,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let refresh_item = MenuItem::with_id(app, "refresh", "Refresh usage", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit YouSage", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &hide_item, &refresh_item, &quit_item])?;
-    let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex usage").menu(&menu).show_menu_on_left_click(false)
+    let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex & Antigravity usage").menu(&menu).show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { show(tray.app_handle()); }
         })

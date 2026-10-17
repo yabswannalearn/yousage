@@ -34,7 +34,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "shortDescription": "Your Codex allowance, at a glance.",
+    "shortDescription": "Your Codex and Antigravity allowance, at a glance.",
     "windows": { "nsis": { "installMode": "currentUser" } }
   }
 }

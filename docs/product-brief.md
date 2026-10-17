@@ -4,9 +4,9 @@
 
 - A desktop application built using Rust.
 - Windows is the target platform for the first version.
-- A small notch can be moved freely on screen. Its compact view previews both the five-hour and weekly usage limits for the account currently signed in to the Codex desktop app on the computer.
-- The compact preview follows the desktop app's signed-in account. CLI and editor sign-ins do not determine the active account in the first version.
-- Opening the notch reveals a detail panel showing all connected accounts on the computer together.
+- A small notch can be moved freely on screen. Its compact view previews both the five-hour and weekly usage limits for the active Codex desktop account or a selected Antigravity model quota group.
+- By default, the compact preview follows the Codex desktop app's signed-in account, and can be switched to any Antigravity model quota group (`Gemini Models`, `Claude and GPT models`, or `Gemini 4 Argon`) from the detail panel or Settings.
+- Opening the notch reveals a detail panel showing all connected Codex accounts and the active Google Antigravity sign-in's model quota groups together.
 - The detail panel expands in place from the notch, opening downward or upward according to the notch's position and available space.
 - Keep the expanded panel within the current monitor's usable area, shifting it horizontally when necessary to avoid screen edges and the taskbar.
 - The visible notch stays on top of other application windows.
@@ -15,10 +15,10 @@
 - YouSage starts automatically when the user signs into Windows, with a "Start with Windows" setting to disable this behavior.
 - On startup, restore whether the notch was last visible or hidden.
 - Use a matte charcoal appearance with rounded edges, labeled five-hour and weekly percentages, and thin usage bars.
-- Usage means the percentage of Codex allowance remaining in the five-hour and weekly windows, with a reset time for each window.
-- Multiple separate ChatGPT accounts, including work and personal, can be monitored at the same time.
-- Additional accounts are connected through an "Add account" flow with a one-time ChatGPT sign-in. They remain available for monitoring while another account is active in the Codex desktop app.
-- Reuse the desktop app's existing sign-in where supported; the exact integration still needs technical verification.
+- Usage means the percentage of Codex or Antigravity allowance remaining in the five-hour and weekly windows, with a reset time for each window.
+- Multiple separate ChatGPT accounts, including work and personal, can be monitored at the same time alongside the active Google Antigravity sign-in.
+- Additional Codex accounts are connected through an "Add account" flow with a one-time ChatGPT sign-in. They remain available for monitoring while another account is active in the Codex desktop app.
+- Antigravity usage follows the active local Google Antigravity CLI (`agy`) sign-in automatically.
 
 ## Account switching
 

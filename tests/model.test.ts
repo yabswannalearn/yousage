@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { percentage, resetLabel, uniqueAccounts, isActiveAccount, freshness, escapeHtml, type Account } from '../src/model.ts';
+import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, selectedAntigravityGroup, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
 
 function account(overrides: Partial<Account> = {}): Account {
   return { id: 'work', label: 'Work', identity: 'work-identity', email: 'work@example.com', plan: 'business', desktop: false, fiveHour: null, weekly: null, updatedAt: null, error: null, ...overrides };
@@ -58,4 +58,23 @@ test('the switch target stays identifiable when desktop and saved cards merge', 
   assert.equal(visible[0].id, 'saved-work');
   assert.ok(!isActiveAccount(personal, accounts, 'desktop'));
   assert.ok(!isActiveAccount(account({ identity: null }), [desktop], 'desktop'));
+});
+
+test('antigravity notch selection resolves matching group or falls back to the first group', () => {
+  const status: AntigravityStatus = {
+    email: 'dev@example.com',
+    updatedAt: 100,
+    error: null,
+    groups: [
+      { id: 'gemini-models', label: 'Gemini Models', description: null, fiveHour: { remaining: 100, resetsAt: null }, weekly: { remaining: 100, resetsAt: null } },
+      { id: 'claude-and-gpt-models', label: 'Claude and GPT models', description: null, fiveHour: { remaining: 97, resetsAt: null }, weekly: { remaining: 83, resetsAt: null } },
+    ],
+  };
+  assert.equal(isAntigravityNotch('codex'), false);
+  assert.equal(isAntigravityNotch('antigravity'), true);
+  assert.equal(isAntigravityNotch('antigravity:claude-and-gpt-models'), true);
+  assert.equal(selectedAntigravityGroup(status, 'antigravity')?.id, 'gemini-models');
+  assert.equal(selectedAntigravityGroup(status, 'antigravity:claude-and-gpt-models')?.id, 'claude-and-gpt-models');
+  assert.equal(selectedAntigravityGroup(status, 'antigravity:unknown')?.id, 'gemini-models');
+  assert.equal(selectedAntigravityGroup({ email: null, groups: [], updatedAt: null, error: null }, 'antigravity'), null);
 });

@@ -16,14 +16,30 @@ export interface Account {
   desktop: boolean;
 }
 
+export interface AntigravityGroup {
+  id: string;
+  label: string;
+  description: string | null;
+  fiveHour: UsageWindow | null;
+  weekly: UsageWindow | null;
+}
+
+export interface AntigravityStatus {
+  email: string | null;
+  groups: AntigravityGroup[];
+  updatedAt: number | null;
+  error: string | null;
+}
+
 export interface Snapshot {
   accounts: Account[];
   activeAccountId: string | null;
+  antigravity: AntigravityStatus;
   refreshing: boolean;
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
   switching: string | null;
-  settings: { startWithWindows: boolean; refreshSeconds: number };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string };
 }
 
 export interface SwitchPlan {
@@ -36,6 +52,20 @@ export interface SwitchPlan {
 export function isActiveAccount(account: Account, accounts: Account[], activeAccountId: string | null): boolean {
   const desktop = accounts.find(a => a.id === activeAccountId);
   return account.id === activeAccountId || Boolean(account.identity && account.identity === desktop?.identity);
+}
+
+export function isAntigravityNotch(notchSource: string | null | undefined): boolean {
+  return notchSource === 'antigravity' || Boolean(notchSource?.startsWith('antigravity:'));
+}
+
+export function selectedAntigravityGroup(antigravity: AntigravityStatus | null | undefined, notchSource: string | null | undefined): AntigravityGroup | null {
+  if (!antigravity?.groups.length) return null;
+  if (notchSource?.startsWith('antigravity:')) {
+    const id = notchSource.slice('antigravity:'.length);
+    const match = antigravity.groups.find(group => group.id === id);
+    if (match) return match;
+  }
+  return antigravity.groups[0];
 }
 
 export function percentage(value: number | null | undefined): string {
@@ -57,10 +87,10 @@ export function resetLabel(seconds: number | null | undefined, now = Date.now())
   return `Resets ${day}, ${time}`;
 }
 
-export function freshness(account: Account, now = Date.now()): string {
-  if (account.error) return account.updatedAt ? 'Last known usage' : 'Usage unavailable';
-  if (!account.updatedAt) return 'Waiting for usage';
-  const age = Math.max(0, Math.floor(now / 1000 - account.updatedAt));
+export function freshness(reading: { updatedAt: number | null; error: string | null }, now = Date.now()): string {
+  if (reading.error) return reading.updatedAt ? 'Last known usage' : 'Usage unavailable';
+  if (!reading.updatedAt) return 'Waiting for usage';
+  const age = Math.max(0, Math.floor(now / 1000 - reading.updatedAt));
   return age < 90 ? 'Updated just now' : `Updated ${Math.floor(age / 60)}m ago`;
 }
 

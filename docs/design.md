@@ -1,6 +1,6 @@
 # Interface direction
 
-YouSage is a small instrument for checking Codex allowance while working. Its job is to make the active account's two limits readable at a glance, with other accounts one click away.
+YouSage is a small instrument for checking Codex and Google Antigravity allowance while working. Its job is to make the selected source's two limits readable at a glance, with all connected Codex accounts and Antigravity model quota groups one click away.
 
 ## Tokens
 
@@ -15,9 +15,9 @@ Use Segoe UI Variable/Segoe UI for labels and headings, and Cascadia Mono/Consol
 
 ## Layout and signature
 
-The collapsed notch is a compact rounded instrument: account identity at the left, two labeled allowance readings at the right. The signature is a pair of thin inset allowance tracks that remain recognizable in both the compact notch and expanded account cards.
+The collapsed notch is a compact rounded instrument: active Codex account or Antigravity model group identity at the left, two labeled allowance readings at the right. The signature is a pair of thin inset allowance tracks that remain recognizable in both the compact notch and expanded cards.
 
-The detail panel unfolds in place above or below the notch. Account cards show both allowance windows and their reset times, with a small active-account marker. The panel also offers refresh, account management, settings, and hide actions.
+The detail panel unfolds in place above or below the notch. It organizes cards into Codex and Antigravity sections showing both allowance windows and their reset times, with active-account and notch-preview markers. The panel also offers refresh, account management, notch preview source selection, settings, and hide actions.
 
 ## Interaction
 
