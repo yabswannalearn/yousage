@@ -29,13 +29,17 @@ To build the standalone executable, use `npm run build:desktop`. To additionally
 
 ## Integration
 
-YouSage uses the documented Codex app-server account API over local standard input/output. It does not start Codex turns or consume model tokens when checking usage. The desktop connection follows `CODEX_HOME` (default `%USERPROFILE%\.codex`); during integration probing, its account usage matched the desktop app's reported usage. Additional sign-ins use app-local account homes with Codex's OS credential-store mode. YouSage never sends tokens to the interface or saves them in its settings/cache files.
+YouSage uses the documented Codex app-server account API over local standard input/output and the Google Antigravity CLI (`agy -p "/usage" --output-format json`) for Antigravity model quota groups. Neither integration starts model turns or consumes model tokens when checking usage.
 
-`YOUSAGE_CODEX_BIN` can select a specific Codex executable. This is useful if Codex is installed outside its usual location.
+The Codex desktop connection follows `CODEX_HOME` (default `%USERPROFILE%\.codex`); during integration probing, its account usage matched the desktop app's reported usage. Additional Codex sign-ins use app-local account homes with Codex's OS credential-store mode.
+
+Antigravity usage follows the active local sign-in in `%USERPROFILE%\.gemini` (reading only the non-secret active email from `google_accounts.json` and quota buckets from `agy`). YouSage never sends tokens to the interface or saves them in its settings/cache files.
+
+`YOUSAGE_CODEX_BIN` and `YOUSAGE_ANTIGRAVITY_BIN` can select specific Codex or Antigravity (`agy`) executables if installed outside their usual locations.
 
 Startup registration is applied in release builds. Development builds do not register themselves to run at Windows sign-in.
 
-The browser-only `?preview=1` route in development shows explicitly labeled demonstration data; real account access requires the Windows app.
+The browser-only `?preview=1` route in development shows explicitly labeled demonstration data for both Codex and Antigravity; real account access requires the Windows app.
 
 ## Account switching
 

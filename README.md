@@ -1,12 +1,12 @@
 # YouSage
 
-A small Windows desktop companion for Codex usage, built with Rust and Tauri.
+A small Windows desktop companion for Codex and Antigravity usage, built with Rust and Tauri.
 
-The movable notch previews the Codex desktop account's five-hour and weekly allowance. Click it to expand a panel with all connected accounts. The panel opens above or below the notch to stay within the screen. Hide the notch to keep YouSage running in the Windows system tray.
+The movable notch previews five-hour and weekly allowance for either the active Codex desktop account or a chosen Antigravity model group. Click it to expand a detail panel with all connected Codex accounts and local Antigravity model quotas. The panel opens above or below the notch to stay within the screen. Hide the notch to keep YouSage running in the Windows system tray.
 
 ## Run from source
 
-Install Rust with the MSVC toolchain, Microsoft C++ Build Tools with a Windows SDK, Node.js, and the Codex desktop app. WebView2 is required at runtime and is already present on most Windows 11 installations.
+Install Rust with the MSVC toolchain, Microsoft C++ Build Tools with a Windows SDK, Node.js, and the Codex desktop app and/or Antigravity CLI (`agy`). WebView2 is required at runtime and is already present on most Windows 11 installations.
 
 On this machine, development tools are configured on D:. See [development setup](docs/development.md).
 
@@ -16,17 +16,25 @@ npm install
 npm run tauri dev
 ```
 
-## Connect accounts
+## Connect Codex accounts
 
 The desktop account is detected from Codex's local sign-in. Use **Add account** to connect additional ChatGPT accounts through your browser. Connecting an account does not switch Codex's sign-in. YouSage keeps additional sign-ins separate and lets Codex store their credentials in Windows Credential Manager.
 
 If you also want the current desktop account to remain available after you switch accounts in Codex, connect it once through **Add account** too. YouSage combines matching accounts into one card while that account is active.
 
-Account menus support renaming, signing in again, and disconnecting. Settings control Windows startup and refresh frequency. The default refresh interval is one minute. Old readings are explicitly marked if a refresh fails; unknown allowance is shown as a dash.
+Account menus support renaming, signing in again, and disconnecting.
 
-## Switch desktop and CLI accounts
+## Monitor Antigravity model quotas
 
-Expand the notch and click **Switch to this account** on a connected account. YouSage switches the Codex desktop app and CLI together. If the desktop app is open, finish any running tasks, then confirm **Restart Codex and switch**. YouSage closes and reopens Codex for you.
+YouSage automatically monitors the active local Antigravity sign-in through the Antigravity CLI (`agy`) and displays a dedicated **Antigravity** section in the detail panel. Each quota group (**Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon**) shows its remaining five-hour and weekly allowance percentages and reset times.
+
+Click **Show in notch** on any Antigravity model group (or on the active Codex account), or use the **Notch preview** selector in **Settings**, to choose which source appears in the compact notch.
+
+Settings also control Windows startup and refresh frequency. The default refresh interval is one minute. Old readings are explicitly marked if a refresh fails; unknown allowance is shown as a dash.
+
+## Switch Codex desktop and CLI accounts
+
+Expand the notch and click **Switch to this account** on a connected Codex account. YouSage switches the Codex desktop app and CLI together. If the desktop app is open, finish any running tasks, then confirm **Restart Codex and switch**. YouSage closes and reopens Codex for you.
 
 Close existing Codex terminal sessions before switching; YouSage checks for these and asks you to close them first. Start them again after the switch to use the chosen account.
 
@@ -51,4 +59,4 @@ The standalone executable is generated at `src-tauri/target/release/yousage.exe`
 - [Domain glossary](CONTEXT.md)
 - [Interface direction](docs/design.md)
 
-Account access uses the [Codex app-server account API](https://learn.chatgpt.com/docs/app-server#auth-endpoints). Usage checks do not start model turns. The standalone app requires an installed Codex executable; it is not bundled into YouSage.
+Codex account access uses the [Codex app-server account API](https://learn.chatgpt.com/docs/app-server#auth-endpoints), and Antigravity quota checks use `agy -p "/usage" --output-format json`. Usage checks do not start model turns or consume model tokens. The standalone app requires an installed Codex executable and/or Antigravity CLI (`agy`); neither is bundled into YouSage.
