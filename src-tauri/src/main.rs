@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod desktop;
+mod auth;
+mod processes;
+mod switching;
 mod model;
 mod rpc;
 mod state;
@@ -16,6 +19,7 @@ fn main() {
             state::get_snapshot, state::refresh_usage, state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings,
             desktop::set_expanded, desktop::hide_notch,
+            switching::prepare_switch, switching::switch_account,
         ])
         .setup(|app| {
             let state = state::AppState::load(app.handle())?;
