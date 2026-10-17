@@ -33,12 +33,47 @@ pub struct AntigravityGroup {
     pub weekly: Option<UsageWindow>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AntigravityAccount {
+    pub id: String,
+    pub label: String,
+    pub email: Option<String>,
+    pub groups: Vec<AntigravityGroup>,
+    pub updated_at: Option<i64>,
+    pub error: Option<String>,
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AntigravityStatus {
     pub email: Option<String>,
     pub groups: Vec<AntigravityGroup>,
+    #[serde(default)]
+    pub accounts: Vec<AntigravityAccount>,
     pub updated_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    pub id: String,
+    pub title: String,
+    pub message: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatus {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub release_url: Option<String>,
+    pub installer_url: Option<String>,
+    pub update_available: bool,
+    pub checking: bool,
     pub error: Option<String>,
 }
 
@@ -193,6 +228,92 @@ pub fn place_panel(anchor: Point, work: WorkArea, width: i32, compact: i32, want
     }
 }
 
+pub fn is_newer_version(current: &str, candidate: &str) -> bool {
+    let parse = |s: &str| -> Option<(u64, u64, u64)> {
+        let clean = s.trim().trim_start_matches(['v', 'V']);
+        let core = clean.split(['-', '+']).next()?;
+        let mut parts = core.split('.');
+        Some((
+            parts.next()?.parse().ok()?,
+            parts.next().unwrap_or("0").parse().ok()?,
+            parts.next().unwrap_or("0").parse().ok()?,
+        ))
+    };
+    match (parse(current), parse(candidate)) {
+        (Some(cur), Some(cand)) => cand > cur,
+        _ => false,
+    }
+}
+
+pub fn parse_github_release(value: &Value, current_version: &str) -> UpdateStatus {
+    let tag = value["tag_name"].as_str().map(|s| s.trim().trim_start_matches(['v', 'V']).to_owned());
+    let release_url = value["html_url"].as_str().map(str::to_owned);
+    let installer_url = value["assets"].as_array().and_then(|assets| {
+        assets.iter().find_map(|asset| {
+            let name = asset["name"].as_str()?;
+            name.ends_with("-setup.exe").then(|| asset["browser_download_url"].as_str().map(str::to_owned)).flatten()
+        })
+    });
+    let update_available = tag.as_deref().is_some_and(|latest| is_newer_version(current_version, latest));
+    UpdateStatus {
+        current_version: current_version.to_owned(),
+        latest_version: tag,
+        release_url,
+        installer_url,
+        update_available,
+        checking: false,
+        error: None,
+    }
+}
+
+pub fn evaluate_alerts(
+    previous: &mut std::collections::HashMap<String, f64>,
+    accounts: &[Account],
+    antigravity: &AntigravityStatus,
+) -> Vec<Alert> {
+    let mut alerts = Vec::new();
+    let mut check = |key: String, owner: &str, window_name: &str, window: Option<&UsageWindow>| {
+        let Some(w) = window else { return; };
+        let pct = w.remaining.round().clamp(0.0, 100.0);
+        let prev = previous.insert(key.clone(), pct);
+        if pct <= 10.0 && prev.is_none_or(|p| p > 10.0) {
+            alerts.push(Alert {
+                id: format!("{key}:critical"),
+                title: format!("{owner} · {window_name} critically low"),
+                message: format!("{owner} has {pct:.0}% remaining in its {window_name} window."),
+                kind: "low".into(),
+            });
+        } else if pct <= 20.0 && prev.is_none_or(|p| p > 20.0) {
+            alerts.push(Alert {
+                id: format!("{key}:low"),
+                title: format!("{owner} · {window_name} low"),
+                message: format!("{owner} has {pct:.0}% remaining in its {window_name} window."),
+                kind: "low".into(),
+            });
+        } else if pct >= 80.0 && prev.is_some_and(|p| p <= 20.0) {
+            alerts.push(Alert {
+                id: format!("{key}:reset"),
+                title: format!("{owner} · {window_name} refilled"),
+                message: format!("{owner} {window_name} window reset ({pct:.0}% remaining)."),
+                kind: "reset".into(),
+            });
+        }
+    };
+    for account in accounts {
+        let key_base = account.identity.as_deref().or(account.email.as_deref()).unwrap_or(&account.id);
+        let owner = format!("Codex ({})", account.label);
+        check(format!("codex:{key_base}:5h"), &owner, "5-hour", account.five_hour.as_ref());
+        check(format!("codex:{key_base}:weekly"), &owner, "weekly", account.weekly.as_ref());
+    }
+    let agy_key = antigravity.email.as_deref().unwrap_or("active");
+    for group in &antigravity.groups {
+        let owner = format!("Antigravity ({})", group.label);
+        check(format!("agy:{agy_key}:{}:5h", group.id), &owner, "5-hour", group.five_hour.as_ref());
+        check(format!("agy:{agy_key}:{}:weekly", group.id), &owner, "weekly", group.weekly.as_ref());
+    }
+    alerts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +378,57 @@ mod tests {
         assert_eq!(groups[1].weekly.as_ref().unwrap().remaining, 90.0);
         assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse_rfc3339("not-a-timestamp"), None);
+    }
+
+    #[test]
+    fn alerts_fire_on_threshold_crossings_and_resets_without_repeating() {
+        let mut tracked = std::collections::HashMap::new();
+        let mut account = Account {
+            id: "desktop".into(),
+            label: "Work".into(),
+            email: Some("work@example.com".into()),
+            five_hour: Some(UsageWindow { remaining: 18.0, resets_at: Some(100) }),
+            weekly: Some(UsageWindow { remaining: 75.0, resets_at: Some(200) }),
+            ..Account::default()
+        };
+        let agy = AntigravityStatus::default();
+        let first = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].kind, "low");
+
+        // Same reading does not fire duplicate alerts.
+        let duplicate = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        assert!(duplicate.is_empty());
+
+        // Dropping to critical (<= 10%) fires once.
+        account.five_hour = Some(UsageWindow { remaining: 9.0, resets_at: Some(100) });
+        let critical = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        assert_eq!(critical.len(), 1);
+        assert!(critical[0].id.ends_with(":critical"));
+
+        // Refilling to >= 80% fires a reset alert.
+        account.five_hour = Some(UsageWindow { remaining: 100.0, resets_at: Some(500) });
+        let reset = evaluate_alerts(&mut tracked, &[account], &agy);
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].kind, "reset");
+    }
+
+    #[test]
+    fn github_release_parser_detects_newer_versions_and_installer_asset() {
+        assert!(is_newer_version("0.1.0", "v0.2.0"));
+        assert!(!is_newer_version("0.1.0", "v0.1.0"));
+        assert!(!is_newer_version("0.2.0", "0.1.9"));
+        let status = parse_github_release(&json!({
+            "tag_name": "v0.2.0",
+            "html_url": "https://github.com/yabswannalearn/yousage/releases/tag/v0.2.0",
+            "assets": [
+                {"name": "yousage.exe", "browser_download_url": "https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/yousage.exe"},
+                {"name": "YouSage_0.2.0_x64-setup.exe", "browser_download_url": "https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/YouSage_0.2.0_x64-setup.exe"}
+            ]
+        }), "0.1.0");
+        assert!(status.update_available);
+        assert_eq!(status.latest_version.as_deref(), Some("0.2.0"));
+        assert_eq!(status.installer_url.as_deref(), Some("https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/YouSage_0.2.0_x64-setup.exe"));
     }
 
     #[test]

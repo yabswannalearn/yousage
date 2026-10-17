@@ -7,10 +7,12 @@ A small Windows desktop companion for **OpenAI Codex** and **Google Antigravity*
 YouSage sits as a compact, movable notch on your Windows desktop so you can see your remaining **5-hour** and **weekly** AI coding allowances at a glance without interrupting your workflow:
 
 - **OpenAI Codex**: Monitor multiple ChatGPT accounts (such as Work and Personal) simultaneously and switch the active Codex desktop app and CLI account in one click.
-- **Google Antigravity**: Automatically track remaining quota across **Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon** via the local Antigravity CLI (`agy`).
-- **Configurable Notch Preview**: Choose whether the collapsed notch displays your active Codex account or any Antigravity model quota group.
+- **Google Antigravity**: Automatically track remaining quota across **Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon** via the local Antigravity CLI (`agy`), plus save and switch between multiple Antigravity accounts.
+- **Single or Dual-Provider Notch Preview**: Display your active Codex account, any Antigravity model group, or **Both (`Codex + Antigravity`)** side-by-side in the compact notch.
+- **Smart Alerts & Switch Suggestions**: Get notified when a 5-hour or weekly window drops below `20%` / `10%` or finishes resetting, and get one-click switch suggestions when your active Codex account runs low.
+- **Global Hotkey (`Alt+Shift+U`) & Dynamic Tray Icon**: Show or toggle the notch from anywhere using `Alt+Shift+U`, and check live status colors and percentages in the system tray.
+- **Built-in Update Checker**: Check for new GitHub Releases directly from **Settings** and download the latest Setup Wizard in one click.
 - **Zero Token Overhead**: Usage checks query local CLI/app-server endpoints directly without starting model turns or consuming tokens.
-- **System Tray & Auto-Start**: Hide the notch to the Windows system tray at any time while background monitoring continues.
 
 ## Download & Install (Windows 10/11 x64)
 
@@ -48,13 +50,14 @@ If you also want the current desktop account to remain available after you switc
 
 Account menus support renaming, signing in again, and disconnecting.
 
-## Monitor Antigravity model quotas
+## Monitor and switch Antigravity accounts
 
 YouSage automatically monitors the active local Antigravity sign-in through the Antigravity CLI (`agy`) and displays a dedicated **Antigravity** section in the detail panel. Each quota group (**Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon**) shows its remaining five-hour and weekly allowance percentages and reset times.
 
-Click **Show in notch** on any Antigravity model group (or on the active Codex account), or use the **Notch preview** selector in **Settings**, to choose which source appears in the compact notch.
+- Click **Save sign-in** next to your active Antigravity email to save that account profile locally, then sign into another Google account in `agy` to monitor and switch between multiple Antigravity accounts in one click.
+- Click **Show in notch** or **Both in notch** on any Antigravity model group, or use the **Notch preview** selector in **Settings**, to choose whether the compact notch displays Codex, an Antigravity group, or both together.
 
-Settings also control Windows startup and refresh frequency. The default refresh interval is one minute. Old readings are explicitly marked if a refresh fails; unknown allowance is shown as a dash.
+Settings also control low-allowance/reset alerts, Windows startup, refresh frequency, and checking for updates. Press **`Alt+Shift+U`** at any time to show or toggle the notch.
 
 ## Switch Codex desktop and CLI accounts
 
