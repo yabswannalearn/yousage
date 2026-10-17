@@ -9,11 +9,15 @@
     "build:desktop": "tauri build --no-bundle",
     "check": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:ui": "node tests/desktop-ui.mjs"
   },
-  "dependencies": { "@tauri-apps/api": "^2.12.4" },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.3",
+    "playwright": "1.62.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }

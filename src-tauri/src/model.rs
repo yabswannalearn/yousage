@@ -56,6 +56,39 @@ pub struct AntigravityStatus {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeStatus {
+    pub email: Option<String>,
+    pub plan: Option<String>,
+    pub five_hour: Option<UsageWindow>,
+    pub weekly: Option<UsageWindow>,
+    pub updated_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProviderColors {
+    pub codex: String,
+    pub antigravity: String,
+    pub claude: String,
+}
+
+impl Default for ProviderColors {
+    fn default() -> Self {
+        Self { codex: "#b7c8b1".into(), antigravity: "#8ab4d8".into(), claude: "#d99a7c".into() }
+    }
+}
+
+impl ProviderColors {
+    pub fn valid(&self) -> bool {
+        [&self.codex, &self.antigravity, &self.claude].into_iter().all(|color| {
+            color.len() == 7 && color.starts_with('#') && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Alert {
@@ -270,6 +303,7 @@ pub fn evaluate_alerts(
     previous: &mut std::collections::HashMap<String, f64>,
     accounts: &[Account],
     antigravity: &AntigravityStatus,
+    claude: &ClaudeStatus,
 ) -> Vec<Alert> {
     let mut alerts = Vec::new();
     let mut check = |key: String, owner: &str, window_name: &str, window: Option<&UsageWindow>| {
@@ -310,6 +344,11 @@ pub fn evaluate_alerts(
         let owner = format!("Antigravity ({})", group.label);
         check(format!("agy:{agy_key}:{}:5h", group.id), &owner, "5-hour", group.five_hour.as_ref());
         check(format!("agy:{agy_key}:{}:weekly", group.id), &owner, "weekly", group.weekly.as_ref());
+    }
+    if claude.error.is_none() {
+        let key = claude.email.as_deref().unwrap_or("active");
+        check(format!("claude:{key}:5h"), "Claude", "5-hour", claude.five_hour.as_ref());
+        check(format!("claude:{key}:weekly"), "Claude", "weekly", claude.weekly.as_ref());
     }
     alerts
 }
@@ -392,23 +431,23 @@ mod tests {
             ..Account::default()
         };
         let agy = AntigravityStatus::default();
-        let first = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        let first = evaluate_alerts(&mut tracked, &[account.clone()], &agy, &ClaudeStatus::default());
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].kind, "low");
 
         // Same reading does not fire duplicate alerts.
-        let duplicate = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        let duplicate = evaluate_alerts(&mut tracked, &[account.clone()], &agy, &ClaudeStatus::default());
         assert!(duplicate.is_empty());
 
         // Dropping to critical (<= 10%) fires once.
         account.five_hour = Some(UsageWindow { remaining: 9.0, resets_at: Some(100) });
-        let critical = evaluate_alerts(&mut tracked, &[account.clone()], &agy);
+        let critical = evaluate_alerts(&mut tracked, &[account.clone()], &agy, &ClaudeStatus::default());
         assert_eq!(critical.len(), 1);
         assert!(critical[0].id.ends_with(":critical"));
 
         // Refilling to >= 80% fires a reset alert.
         account.five_hour = Some(UsageWindow { remaining: 100.0, resets_at: Some(500) });
-        let reset = evaluate_alerts(&mut tracked, &[account], &agy);
+        let reset = evaluate_alerts(&mut tracked, &[account], &agy, &ClaudeStatus::default());
         assert_eq!(reset.len(), 1);
         assert_eq!(reset[0].kind, "reset");
     }

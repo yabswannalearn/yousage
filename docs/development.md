@@ -29,7 +29,7 @@ To build the standalone executable, use `npm run build:desktop`. To additionally
 
 ## Integration
 
-YouSage uses the documented Codex app-server account API over local standard input/output and the Google Antigravity CLI (`agy -p "/usage" --output-format json`) for Antigravity model quota groups. Neither integration starts model turns or consumes model tokens when checking usage.
+YouSage uses the documented Codex app-server account API over local standard input/output, the Google Antigravity CLI (`agy -p "/usage" --output-format json`) for Antigravity model quota groups, and Claude's account metadata endpoint for subscription usage. Usage checks do not start model turns or consume model tokens.
 
 The Codex desktop connection follows `CODEX_HOME` (default `%USERPROFILE%\.codex`); during integration probing, its account usage matched the desktop app's reported usage. Additional Codex sign-ins use app-local account homes with Codex's OS credential-store mode.
 
@@ -39,7 +39,15 @@ Antigravity usage follows the active local sign-in in `%USERPROFILE%\.gemini` (r
 
 Startup registration is applied in release builds. Development builds do not register themselves to run at Windows sign-in.
 
-The browser-only `?preview=1` route in development shows explicitly labeled demonstration data for both Codex and Antigravity; real account access requires the Windows app.
+The browser-only `?preview=1` route in development shows explicitly labeled demonstration data for Codex, Antigravity, and Claude; real account access requires the Windows app.
+
+Claude reads the existing subscription OAuth credential from `%USERPROFILE%\.claude\.credentials.json`, honoring `CLAUDE_CONFIG_DIR`, and queries `https://api.anthropic.com/api/oauth/usage`. It uses the system `curl` already used by the update checker, passes its authorization header through stdin, and never passes tokens in process arguments. The endpoint is internal and is not a supported public API. Checks have a five-minute minimum interval, with a fifteen-minute minimum backoff on HTTP 429; a longer numeric `Retry-After` is honored. Claude Code owns login and token refresh. The preview route also includes Claude demonstration data.
+
+Provider accents and visibility are saved in `settings.json` as `providerColors` and `hiddenProviders`. Existing settings gain defaults without losing connected accounts. Hiding preserves credentials, colors, and the preferred notch source; background polling continues while readings and alerts are omitted. The frontend temporarily selects a visible source and restores the preference when it becomes visible again.
+
+The native drag command marks the gesture as active until the mouse is released. Focus-loss collapse and frontend rendering are deferred during the gesture, and the release click stays suppressed until the next intentional pointer press. This prevents a long drag from outlasting a fixed click-suppression timeout and hiding the expanded contents. The native color picker also suspends automatic collapse while open.
+
+`npm run test:ui` exercises the real frontend against a mocked Tauri bridge while the Vite server is running; it requires Playwright Chromium (`npx playwright install chromium`). It covers long drags, focus changes, release clicks, color-picker focus, separate accents, preview selection, and hiding/restoring every subscription. These checks do not verify an actual Windows drag gesture or a live Claude account. Run the built Windows app for those checks; live Claude data requires a valid subscription sign-in.
 
 ## Account switching
 

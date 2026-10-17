@@ -42,6 +42,35 @@ export interface AntigravityStatus {
   error: string | null;
 }
 
+export interface ClaudeStatus {
+  email: string | null;
+  plan: string | null;
+  fiveHour: UsageWindow | null;
+  weekly: UsageWindow | null;
+  updatedAt: number | null;
+  error: string | null;
+}
+
+export const defaultProviderColors = { codex: '#b7c8b1', antigravity: '#8ab4d8', claude: '#d99a7c' };
+export type Provider = keyof typeof defaultProviderColors;
+
+export function providerColor(colors: Partial<Record<Provider, string>> | undefined, provider: Provider): string {
+  const color = colors?.[provider];
+  return color && /^#[0-9a-f]{6}$/i.test(color) ? color : defaultProviderColors[provider];
+}
+
+export function effectiveNotchSource(source: string, hidden: readonly string[] = []): string {
+  const visible = (provider: Provider) => !hidden.includes(provider);
+  if (isBothNotch(source)) {
+    if (visible('codex') && visible('antigravity')) return source;
+    if (visible('codex')) return 'codex';
+    if (visible('antigravity')) return source.replace(/^both/, 'antigravity');
+  } else if (isAntigravityNotch(source) && visible('antigravity')) return source;
+  else if (source === 'claude' && visible('claude')) return source;
+  else if (source === 'codex' && visible('codex')) return source;
+  return (['codex', 'antigravity', 'claude'] as const).find(visible) ?? 'none';
+}
+
 export interface Alert {
   id: string;
   title: string;
@@ -63,13 +92,14 @@ export interface Snapshot {
   accounts: Account[];
   activeAccountId: string | null;
   antigravity: AntigravityStatus;
+  claude: ClaudeStatus;
   alerts: Alert[];
   update: UpdateStatus;
   refreshing: boolean;
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
   switching: string | null;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[] };
 }
 
 export interface SwitchPlan {

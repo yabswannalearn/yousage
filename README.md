@@ -1,6 +1,6 @@
 # YouSage
 
-A small Windows desktop companion for **OpenAI Codex** and **Google Antigravity** usage, built with Rust and Tauri.
+A small Windows desktop companion for **OpenAI Codex**, **Google Antigravity**, and **Claude** usage, built with Rust and Tauri.
 
 ## About
 
@@ -8,11 +8,13 @@ YouSage sits as a compact, movable notch on your Windows desktop so you can see 
 
 - **OpenAI Codex**: Monitor multiple ChatGPT accounts (such as Work and Personal) simultaneously and switch the active Codex desktop app and CLI account in one click.
 - **Google Antigravity**: Automatically track remaining quota across **Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon** via the local Antigravity CLI (`agy`), plus save and switch between multiple Antigravity accounts.
-- **Single or Dual-Provider Notch Preview**: Display your active Codex account, any Antigravity model group, or **Both (`Codex + Antigravity`)** side-by-side in the compact notch.
+- **Claude**: Track your Claude subscription's five-hour and weekly allowance through the existing local Claude Code sign-in, with an optional Claude notch preview.
+- **Subscription settings**: Choose a custom accent color for Codex, Antigravity, and Claude, and hide or restore each subscription without disconnecting it. Hidden subscriptions are omitted from the notch, detail panel, tray readings, and alerts. Your chosen preview and colors are remembered.
+- **Notch Preview**: Display your active Codex account, any Antigravity model group, or your Claude subscription. The **Both (`Codex + Antigravity`)** option shows those two sources side-by-side.
 - **Smart Alerts & Switch Suggestions**: Get notified when a 5-hour or weekly window drops below `20%` / `10%` or finishes resetting, and get one-click switch suggestions when your active Codex account runs low.
 - **Global Hotkey (`Alt+Shift+U`) & Dynamic Tray Icon**: Show or toggle the notch from anywhere using `Alt+Shift+U`, and check live status colors and percentages in the system tray.
 - **Built-in Update Checker**: Check for new GitHub Releases directly from **Settings** and download the latest Setup Wizard in one click.
-- **Zero Token Overhead**: Usage checks query local CLI/app-server endpoints directly without starting model turns or consuming tokens.
+- **Zero Token Overhead**: Usage checks read local CLI/app-server endpoints or Claude account metadata without starting model turns or consuming tokens.
 
 ## Download & Install (Windows 10/11 x64)
 
@@ -26,13 +28,15 @@ Grab the latest installer from [**GitHub Releases**](https://github.com/yabswann
 
 ### Prerequisites on the user's PC
 
-YouSage reads usage from the tools already installed on your machine (neither is bundled inside YouSage):
+Install and sign in to the tools for the subscriptions you want to monitor. These tools are not bundled with YouSage:
+
 - For **Codex** monitoring: [OpenAI Codex desktop app / CLI](https://chatgpt.com/codex) signed in on your PC.
 - For **Antigravity** monitoring: Google Antigravity (`agy`) installed and signed in on your PC.
+- For **Claude** monitoring: Claude Code signed into a Claude subscription with `claude auth login`.
 
 ## Run from source
 
-Install Rust with the MSVC toolchain, Microsoft C++ Build Tools with a Windows SDK, Node.js, and the Codex desktop app and/or Antigravity CLI (`agy`). WebView2 is required at runtime and is already present on most Windows 11 installations.
+Install Rust with the MSVC toolchain, Microsoft C++ Build Tools with a Windows SDK, and Node.js, plus the tools for your chosen subscriptions listed above. WebView2 is required at runtime and is already present on most Windows 11 installations.
 
 On this machine, development tools are configured on D:. See [development setup](docs/development.md).
 
@@ -69,6 +73,16 @@ The outgoing account stays connected in YouSage, even if it was originally detec
 
 This feature supports Codex 0.160's file and encrypted Windows credential storage. It follows `CODEX_HOME`, or the default `~/.codex` home. CLI sessions configured with another home keep their own sign-in. Temporary and environment-provided access-token sign-ins cannot be switched this way.
 
+## Claude usage and subscription settings
+
+Claude appears in its own section, separate from Claude models offered through Antigravity. YouSage reads the existing Claude Code subscription sign-in from `%USERPROFILE%\.claude` (or `CLAUDE_CONFIG_DIR`). If the sign-in is missing or expired, run `claude auth login` and refresh YouSage. Token refresh and sign-in stay with Claude Code.
+
+Claude usage checks call the read-only account metadata endpoint, without sending prompts or starting model turns. This endpoint is an internal Claude API and can change. YouSage checks at most once every five minutes, keeps last known readings on network errors, and backs off at least fifteen minutes after rate limiting. It honors a longer numeric `Retry-After` header. Credentials never enter the interface or YouSage's settings/cache files. See [Claude Code authentication](https://code.claude.com/docs/en/authentication) and [the upstream usage endpoint report](https://github.com/anthropics/claude-code/issues/30930).
+
+Open **Settings → Subscriptions** to change each subscription's color or turn its visibility off and on. Colors apply to usage bars, avatars, badges, and notch readings; low-allowance warnings remain amber. Hiding preserves the sign-in and color while background usage checks continue. If the preferred notch source is hidden, the notch temporarily shows a visible subscription. Restoring the source brings its preview back. Settings remain accessible when all subscriptions are hidden.
+
+Drag the header to move either the compact notch or the expanded detail panel. The expanded contents stay visible throughout a drag, and releasing the header does not toggle the panel. A separate click still opens or closes it.
+
 ## Build and verify
 
 ```powershell
@@ -78,6 +92,8 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run build:desktop
 ```
 
+For the desktop interface regression checks, start `npm run dev` in another terminal and run `npm run test:ui`. If Playwright's browser is not installed, run `npx playwright install chromium` once. These checks use demonstration data with a mocked native bridge; they cover long drags, focus changes, provider colors, Claude preview, and hiding/restoring subscriptions.
+
 The standalone executable is generated at `src-tauri/target/release/yousage.exe`. To additionally package a Windows installer, use `npm run tauri build`; it generates the installer under `src-tauri/target/release/bundle/nsis/`. Development builds do not register themselves to start with Windows. Release builds honor the **Start with Windows** setting.
 
 ## Design and scope
@@ -86,4 +102,4 @@ The standalone executable is generated at `src-tauri/target/release/yousage.exe`
 - [Domain glossary](CONTEXT.md)
 - [Interface direction](docs/design.md)
 
-Codex account access uses the [Codex app-server account API](https://learn.chatgpt.com/docs/app-server#auth-endpoints), and Antigravity quota checks use `agy -p "/usage" --output-format json`. Usage checks do not start model turns or consume model tokens. The standalone app requires an installed Codex executable and/or Antigravity CLI (`agy`); neither is bundled into YouSage.
+Codex account access uses the [Codex app-server account API](https://learn.chatgpt.com/docs/app-server#auth-endpoints), Antigravity quota checks use `agy -p "/usage" --output-format json`, and Claude reads subscription usage from its account metadata endpoint using the local Claude Code sign-in. Usage checks do not start model turns or consume model tokens. Install the tools for the subscriptions you want to monitor; they are not bundled into YouSage.
