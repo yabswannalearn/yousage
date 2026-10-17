@@ -42,6 +42,7 @@ pub struct Snapshot {
     pub refreshing: bool,
     pub desktop_error: Option<String>,
     pub login: Option<Login>,
+    pub switching: Option<String>,
     pub settings: Settings,
 }
 
@@ -52,6 +53,7 @@ pub struct AppState {
     persist_guard: Mutex<()>,
     pub io: tokio::sync::Mutex<()>,
     pub login_running: AtomicBool,
+    pub switch_running: AtomicBool,
     pub cancel_login: AtomicBool,
     pub resizing: AtomicBool,
     pub resize_generation: AtomicU64,
@@ -68,12 +70,12 @@ impl AppState {
         cached.retain(|a| a.desktop || config.profiles.iter().any(|p| p.id == a.id));
         for account in &mut cached { account.error = Some("Checking latest usage…".into()); }
         let snapshot = Snapshot {
-            accounts: cached, active_account_id: None, refreshing: false, desktop_error: None, login: None,
+            accounts: cached, active_account_id: None, refreshing: false, desktop_error: None, login: None, switching: None,
             settings: Settings { start_with_windows: config.start_with_windows, refresh_seconds: config.refresh_seconds },
         };
         Ok(Self {
             config: Mutex::new(config), snapshot: Mutex::new(snapshot), directory, persist_guard: Mutex::new(()),
-            io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
+            io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), switch_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
             resizing: AtomicBool::new(false), resize_generation: AtomicU64::new(0), window: Mutex::new(crate::desktop::WindowState::default()),
         })
     }
@@ -91,7 +93,7 @@ impl AppState {
         let _ = app.emit("usage-updated", snapshot);
     }
 
-    fn profile_home(&self, id: &str) -> Result<PathBuf, String> {
+    pub fn profile_home(&self, id: &str) -> Result<PathBuf, String> {
         // Profile identifiers are generated UUIDs; never use an interface-supplied path.
         uuid::Uuid::parse_str(id).map_err(|_| "Invalid account.")?;
         Ok(self.directory.join("accounts").join(id))
@@ -105,7 +107,7 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
 
 pub fn now() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }
 
-async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -> Result<Option<Account>, String> {
+pub async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -> Result<Option<Account>, String> {
     let response = rpc.request("account/read", json!({"refreshToken":false})).await?;
     let account = &response["account"];
     if account.is_null() || account["type"] != "chatgpt" { return Ok(None) }
@@ -115,10 +117,15 @@ async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -> Re
         id: id.into(), label: if label.is_empty() { email.as_deref().and_then(|s| s.split('@').next()).unwrap_or("Codex account").into() } else { label.into() },
         email, plan, desktop, ..Account::default()
     };
+    // Account IDs live in the local auth token, not in every rate-limit response.
+    // Parse only the identity here; the token never crosses the Rust boundary.
+    let auth = rpc.request("getAuthStatus", json!({"includeToken":true,"refreshToken":false})).await.ok();
+    result.identity = auth.as_ref().and_then(|a| a["authToken"].as_str()).and_then(crate::auth::token_account_id)
+        .map(|id| format!("{}:{id}", result.email.as_deref().unwrap_or("").to_lowercase()));
     match rpc.request("account/rateLimits/read", json!(null)).await {
         Ok(limits) => {
             (result.five_hour, result.weekly) = parse_limits(&limits);
-            result.identity = limits["accountId"].as_str().map(|id| format!("{}:{id}", result.email.as_deref().unwrap_or("").to_lowercase()));
+            if result.identity.is_none() { result.identity = limits["accountId"].as_str().map(|id| format!("{}:{id}", result.email.as_deref().unwrap_or("").to_lowercase())); }
             result.updated_at = Some(now());
             if result.five_hour.is_none() && result.weekly.is_none() {
                 result.error = Some("Codex did not return five-hour or weekly limits for this account.".into());
@@ -131,6 +138,7 @@ async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -> Re
 
 pub async fn refresh_all(app: AppHandle) {
     let state = app.state::<AppState>();
+    if state.switch_running.load(Ordering::SeqCst) { return }
     let Ok(_guard) = state.io.try_lock() else { return };
     state.snapshot.lock().unwrap().refreshing = true;
     state.emit(&app);
@@ -140,6 +148,17 @@ pub async fn refresh_all(app: AppHandle) {
         if let Ok(home) = state.profile_home(&profile.id) { profiles.push((profile.id, profile.label, home, false)); }
     }
     for (id, label, home, desktop) in profiles {
+        if !desktop {
+            let mut snapshot = state.snapshot.lock().unwrap();
+            let active = snapshot.accounts.iter().find(|a| a.id == "desktop" && snapshot.active_account_id.as_deref() == Some("desktop")).cloned();
+            let same = active.as_ref().and_then(|active| active.identity.as_ref()).is_some_and(|identity| snapshot.accounts.iter().any(|a| a.id == id && a.identity.as_ref() == Some(identity)));
+            if same {
+                // One refresh owner for the active login avoids competing token rotation.
+                let mut account = active.unwrap(); account.id = id.clone(); account.label = label; account.desktop = false;
+                snapshot.accounts.retain(|a| a.id != id); snapshot.accounts.push(account);
+                drop(snapshot); state.emit(&app); continue
+            }
+        }
         let result = match Rpc::start(&home, !desktop).await {
             Ok(mut rpc) => read_account(&mut rpc, &id, &label, desktop).await,
             Err(error) => Err(error),
@@ -189,6 +208,7 @@ pub fn refresh_usage(app: AppHandle) { tauri::async_runtime::spawn(refresh_all(a
 #[tauri::command]
 pub fn connect_account(app: AppHandle, label: String, reconnect_id: Option<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
+    if state.switch_running.load(Ordering::SeqCst) { return Err("Wait for the account switch to finish.".into()) }
     if state.login_running.swap(true, Ordering::SeqCst) { return Err("Finish or cancel the current sign-in first.".into()) }
     state.cancel_login.store(false, Ordering::SeqCst);
     state.snapshot.lock().unwrap().login = Some(Login { status: "Opening sign-in…".into(), error: None });
@@ -261,6 +281,7 @@ pub fn dismiss_login_error(app: AppHandle) {
 #[tauri::command]
 pub async fn disconnect_account(app: AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<AppState>();
+    if state.switch_running.load(Ordering::SeqCst) { return Err("Wait for the account switch to finish.".into()) }
     if state.login_running.load(Ordering::SeqCst) { return Err("Finish or cancel sign-in before disconnecting an account.".into()) }
     if id == "desktop" { return Err("The desktop account is managed by Codex.".into()) }
     let home = state.profile_home(&id)?;

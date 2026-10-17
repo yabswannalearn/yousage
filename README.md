@@ -24,6 +24,16 @@ If you also want the current desktop account to remain available after you switc
 
 Account menus support renaming, signing in again, and disconnecting. Settings control Windows startup and refresh frequency. The default refresh interval is one minute. Old readings are explicitly marked if a refresh fails; unknown allowance is shown as a dash.
 
+## Switch desktop and CLI accounts
+
+Expand the notch and click **Switch to this account** on a connected account. YouSage switches the Codex desktop app and CLI together. If the desktop app is open, finish any running tasks, then confirm **Restart Codex and switch**. YouSage closes and reopens Codex for you.
+
+Close existing Codex terminal sessions before switching; YouSage checks for these and asks you to close them first. Start them again after the switch to use the chosen account.
+
+The outgoing account stays connected in YouSage, even if it was originally detected from Codex rather than added manually. The switch preserves Codex configuration and conversation files. If verification fails, YouSage restores the previous sign-in.
+
+This feature supports Codex 0.160's file and encrypted Windows credential storage. It follows `CODEX_HOME`, or the default `~/.codex` home. CLI sessions configured with another home keep their own sign-in. Temporary and environment-provided access-token sign-ins cannot be switched this way.
+
 ## Build and verify
 
 ```powershell

@@ -2,13 +2,13 @@ import './style.css';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { escapeHtml as esc, freshness, percentage, resetLabel, uniqueAccounts, type Account, type Snapshot, type UsageWindow } from './model';
+import { escapeHtml as esc, freshness, percentage, resetLabel, uniqueAccounts, isActiveAccount, type Account, type Snapshot, type SwitchPlan, type UsageWindow } from './model';
 
 const native = isTauri();
 const params = new URLSearchParams(location.search);
 const preview = !native && import.meta.env.DEV && params.has('preview');
 const root = document.querySelector<HTMLElement>('#app')!;
-let snapshot: Snapshot = { accounts: [], activeAccountId: null, refreshing: false, desktopError: null, login: null, settings: { startWithWindows: true, refreshSeconds: 60 } };
+let snapshot: Snapshot = { accounts: [], activeAccountId: null, refreshing: false, desktopError: null, login: null, switching: null, settings: { startWithWindows: true, refreshSeconds: 60 } };
 let expanded = false;
 let upward = false;
 let settingsOpen = false;
@@ -19,6 +19,9 @@ let error = '';
 let transition = false;
 let desiredHeight = 0;
 let ignoreClickUntil = 0;
+let switchPlan: SwitchPlan | null = null;
+let preparingSwitch: string | null = null;
+let notice = '';
 
 const paths: Record<string, string> = {
   chevron: '<path d="m5 8 5 5 5-5"/>',
@@ -28,6 +31,7 @@ const paths: Record<string, string> = {
   hide: '<path d="M4 10h12"/>',
   x: '<path d="m5 5 10 10M15 5 5 15"/>',
   more: '<circle cx="4" cy="10" r=".6"/><circle cx="10" cy="10" r=".6"/><circle cx="16" cy="10" r=".6"/>',
+  swap: '<path d="M3 6h13m-3-3 3 3-3 3M17 14H4m3-3-3 3 3 3"/>',
 };
 const icon = (name: string) => `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? ''}</svg>`;
 const iconButton = (action: string, name: string, label: string, extra = '') => `<button type="button" class="icon-button" data-action="${action}" aria-label="${label}" title="${label}" ${extra}>${icon(name)}</button>`;
@@ -37,6 +41,21 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (!preview) throw new Error('Open the YouSage desktop app to connect your accounts.');
   if (command === 'set_expanded') return { upward: params.has('up'), height: Math.min(Number(args?.height ?? 80), innerHeight - 64) } as T;
   if (command === 'get_snapshot') return snapshot as T;
+  if (command === 'prepare_switch') {
+    const account = snapshot.accounts.find(a => a.id === args?.id)!;
+    return { id: account.id, label: account.label, desktopRunning: true, cliRunning: params.has('cli') } as T;
+  }
+  if (command === 'switch_account') {
+    snapshot.switching = 'Switching desktop and CLI…'; render();
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const account = snapshot.accounts.find(a => a.id === args?.id)!;
+    const previous = snapshot.accounts.find(a => a.id === 'desktop');
+    if (previous && !snapshot.accounts.some(a => !a.desktop && a.identity === previous.identity)) snapshot.accounts.push({ ...previous, id: 'preview-work', desktop: false });
+    snapshot.accounts = snapshot.accounts.filter(a => a.id !== 'desktop');
+    snapshot.accounts.push({ ...account, id: 'desktop', desktop: true });
+    snapshot.activeAccountId = 'desktop'; snapshot.switching = null; render();
+    return undefined as T;
+  }
   if (command === 'refresh_usage') {
     snapshot.accounts.forEach(account => { account.updatedAt = Date.now() / 1000; });
   } else if (command === 'rename_account') {
@@ -68,12 +87,20 @@ function limitRow(label: string, window: UsageWindow | null) {
 }
 
 function accountCard(account: Account) {
-  const desktop = snapshot.accounts.find(a => a.id === snapshot.activeAccountId);
-  const active = account.id === snapshot.activeAccountId || Boolean(account.identity && account.identity === desktop?.identity);
+  const active = isActiveAccount(account, snapshot.accounts, snapshot.activeAccountId);
   const initial = esc((account.label || account.email || 'C').charAt(0).toUpperCase());
   const id = esc(account.id);
   const controls = managing === account.id ? `<form class="manage-form" data-form="rename" data-id="${id}"><label class="field-label" for="name-${id}">Account name</label><div class="inline-input"><input id="name-${id}" name="label" value="${esc(account.label)}" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button></div><div class="manage-actions">${account.desktop ? '<span class="fine-print">Sign-in is managed in Codex.</span>' : `<button type="button" class="text-button" data-action="reconnect" data-id="${id}">Sign in again</button><button type="button" class="text-button danger" data-action="disconnect" data-id="${id}">${disconnectConfirmation === account.id ? 'Confirm disconnect' : 'Disconnect'}</button>`}</div></form>` : '';
-  return `<article class="account-card ${active ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(account.label)}${active ? '<span class="active-badge">Active</span>' : ''}</div><div class="account-email" title="${esc(account.email ?? '')}">${esc(account.email ?? 'ChatGPT account')}${account.plan ? `<span class="plan"> · ${esc(account.plan)}</span>` : ''}</div></div>${iconButton('manage', 'more', 'Manage account', `data-id="${id}"`)}</div><div class="limits">${limitRow('5 hour', account.fiveHour)}${limitRow('Weekly', account.weekly)}</div><div class="account-status ${account.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(account))}</div>${account.error ? `<p class="account-error">${esc(account.error)}</p>` : ''}${controls}</article>`;
+  const switchButton = !active && !account.desktop ? `<button class="switch-account-button" data-action="prepare-switch" data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('swap')}<span>${preparingSwitch === account.id ? 'Checking Codex…' : 'Switch to this account'}</span><span aria-hidden="true">→</span></button>` : '';
+  return `<article class="account-card ${active ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(account.label)}${active ? '<span class="active-badge">Active</span>' : ''}</div><div class="account-email" title="${esc(account.email ?? '')}">${esc(account.email ?? 'ChatGPT account')}${account.plan ? `<span class="plan"> · ${esc(account.plan)}</span>` : ''}</div></div>${iconButton('manage', 'more', 'Manage account', `data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan ? 'disabled' : ''}`)}</div><div class="limits">${limitRow('5 hour', account.fiveHour)}${limitRow('Weekly', account.weekly)}</div><div class="account-status ${account.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(account))}</div>${account.error ? `<p class="account-error">${esc(account.error)}</p>` : ''}${controls}${switchButton}</article>`;
+}
+
+function switchPanel() {
+  if (!switchPlan && !snapshot.switching) return '';
+  if (snapshot.switching) return `<section class="switch-panel" role="status" aria-live="polite"><div class="switch-symbol">${icon('swap')}</div><h2>${esc(snapshot.switching)}</h2><p>The notch will update when the new account is ready.</p></section>`;
+  const plan = switchPlan!;
+  const current = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId).find(a => isActiveAccount(a, snapshot.accounts, snapshot.activeAccountId));
+  return `<section class="switch-panel" role="dialog" aria-labelledby="switch-title"><div class="section-heading"><h2 id="switch-title">Switch Codex account</h2>${iconButton('cancel-switch', 'x', 'Cancel account switch')}</div><div class="switch-route"><span>${esc(current?.label ?? 'Current sign-in')}</span>${icon('swap')}<strong>${esc(plan.label)}</strong></div><span class="switch-targets">Codex desktop + CLI</span><p>${plan.cliRunning ? 'Close your Codex terminal sessions first, then check again. Start new sessions after switching.' : plan.desktopRunning ? 'Finish any running tasks before continuing. Codex will close and reopen with this account.' : 'New Codex desktop and CLI sessions will use this account.'}</p>${plan.cliRunning ? `<button class="primary-button" data-action="prepare-switch" data-id="${esc(plan.id)}">Check again</button>` : `<button id="confirm-switch" class="primary-button" data-action="confirm-switch">${plan.desktopRunning ? 'Restart Codex and switch' : 'Switch desktop and CLI'}<span aria-hidden="true">→</span></button>`}<p class="switch-footnote">Your current account stays connected in YouSage.</p></section>`;
 }
 
 function settingsPanel() {
@@ -95,9 +122,9 @@ function render() {
   const accounts = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId);
   const desktop = snapshot.accounts.find(account => account.id === snapshot.activeAccountId);
   const active = accounts.find(account => account.id === snapshot.activeAccountId || (account.identity && account.identity === desktop?.identity));
-  const title = active?.label ?? (snapshot.refreshing ? 'Checking Codex' : 'No active account');
+  const title = snapshot.switching ? 'Switching account…' : active?.label ?? (snapshot.refreshing ? 'Checking Codex' : 'No active account');
   root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${transition ? 'transitioning' : ''}`;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(active?.error ?? snapshot.desktopError ?? 'Click to expand · drag to move')}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${preview ? 'Preview data' : active?.error ? 'Last known usage' : 'Codex remaining'}</span></span><span class="compact-readings">${smallReading('5h', active?.fiveHour ?? null)}${smallReading('Week', active?.weekly ?? null)}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Connected accounts"><div class="panel-scroll"><header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'USAGE REMAINING'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing ? 'disabled' : '')}</header>${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer"><button class="add-button" type="button" data-action="add" ${snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button><div class="footer-tools">${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(active?.error ?? snapshot.desktopError ?? 'Click to expand · drag to move')}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${preview ? 'Preview data' : active?.error ? 'Last known usage' : 'Codex remaining'}</span></span><span class="compact-readings">${smallReading('5h', active?.fiveHour ?? null)}${smallReading('Week', active?.weekly ?? null)}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Connected accounts"><div class="panel-scroll"><header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'USAGE REMAINING'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${switchPanel()}${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer"><button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button><div class="footer-tools">${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   if (scroll) scroll.scrollTop = scrollTop;
   if (preserved) {
@@ -140,7 +167,7 @@ async function toggle(open = !expanded) {
   } else {
     root.classList.add('closing');
     await new Promise(resolve => setTimeout(resolve, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150));
-    expanded = false; settingsOpen = false; adding = false; managing = null; disconnectConfirmation = null; desiredHeight = 0;
+    expanded = false; settingsOpen = false; adding = false; managing = null; disconnectConfirmation = null; switchPlan = null; desiredHeight = 0;
     await call('set_expanded', { expanded: false, height: 80 });
     if (preview) root.style.height = '80px';
   }
@@ -152,6 +179,28 @@ async function attempt(action: () => Promise<unknown>) {
   error = '';
   try { await action(); } catch (err) { error = err instanceof Error ? err.message : String(err); }
   render();
+}
+
+async function prepareSwitch(id: string) {
+  if (snapshot.switching || preparingSwitch) return;
+  preparingSwitch = id; switchPlan = null; notice = ''; error = ''; render();
+  try {
+    const plan = await call<SwitchPlan>('prepare_switch', { id });
+    if (expanded) { switchPlan = plan; adding = false; managing = null; }
+  } finally { preparingSwitch = null; render(); }
+  const scroll = root.querySelector('.panel-scroll');
+  if (scroll) scroll.scrollTop = 0;
+  document.getElementById('confirm-switch')?.focus({ preventScroll: true });
+}
+
+async function confirmSwitch() {
+  const plan = switchPlan;
+  if (!plan || plan.cliRunning || snapshot.switching) return;
+  switchPlan = null; snapshot.switching = 'Preparing the account switch…'; notice = ''; render();
+  try {
+    await call('switch_account', { id: plan.id, restartDesktop: plan.desktopRunning });
+    notice = `Now using ${plan.label} in Codex desktop and new CLI sessions.`;
+  } finally { snapshot.switching = null; render(); }
 }
 
 root.addEventListener('click', event => {
@@ -176,6 +225,9 @@ root.addEventListener('click', event => {
       const account = snapshot.accounts.find(a => a.id === id);
       void attempt(() => call('connect_account', { label: account?.label ?? '', reconnectId: id })); break;
     }
+    case 'prepare-switch': if (id) void attempt(() => prepareSwitch(id)); break;
+    case 'confirm-switch': void attempt(confirmSwitch); break;
+    case 'cancel-switch': switchPlan = null; render(); break;
   }
 });
 
@@ -235,7 +287,7 @@ async function start() {
   }
   await listen<Snapshot>('usage-updated', event => { snapshot = event.payload; render(); });
   await listen('collapse-requested', () => { if (expanded && !transition) void toggle(false); });
-  await listen('panel-collapsed', () => { expanded = false; transition = false; desiredHeight = 0; render(); });
+  await listen('panel-collapsed', () => { expanded = false; transition = false; switchPlan = null; desiredHeight = 0; render(); });
   snapshot = await call<Snapshot>('get_snapshot');
   render();
 }

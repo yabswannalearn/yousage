@@ -36,3 +36,18 @@ YouSage uses the documented Codex app-server account API over local standard inp
 Startup registration is applied in release builds. Development builds do not register themselves to run at Windows sign-in.
 
 The browser-only `?preview=1` route in development shows explicitly labeled demonstration data; real account access requires the Windows app.
+
+## Account switching
+
+Switches preserve the existing Codex home and change only its Codex auth credential. Connected accounts use Codex 0.160's `secrets/codex_auth.age` file and the corresponding master password in Windows Credential Manager. The canonical home path determines the credential-store entry; other Codex secrets are left intact. The destination respects the effective `cli_auth_credentials_store` value read from Codex. Crypto runs on blocking workers rather than the interface thread.
+
+Before a switch, YouSage refreshes and validates the chosen sign-in, checks running processes, and requires explicit confirmation before closing the desktop app. Existing CLI sessions must be closed first. After shutdown it saves the latest outgoing credentials to a connected account, replaces the active credential, and verifies the account through a new Codex app-server process. A verification failure restores the old credential. Only the active connection refreshes an active account, avoiding competing refresh-token rotation from its saved connection.
+
+To test encrypted-store interoperability without using a real account:
+
+```powershell
+. ./scripts/tools.ps1
+cargo test --manifest-path src-tauri/Cargo.toml isolated_codex_keyring_compatibility -- --ignored
+```
+
+This opt-in Windows test creates a disposable Codex home and a dummy API credential, verifies Codex/YouSage compatibility, then removes the test credential and directory. It does not switch the user's Codex account.

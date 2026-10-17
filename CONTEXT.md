@@ -15,6 +15,9 @@ _Avoid_: Selected account
 **Connected account**:
 An **Account** added to YouSage for ongoing monitoring, including when another **Account** is active. The **Detail panel** includes all connected accounts.
 
+**Account switch**:
+Choosing a **Connected account** to use in both the Codex desktop app and Codex CLI on the computer. Desktop and CLI switch together.
+
 **Usage remaining**:
 The percentage of an account's Codex allowance still available in a particular **Usage window**.
 _Avoid_: Token count, usage consumed, spending

@@ -20,6 +20,12 @@
 - Additional accounts are connected through an "Add account" flow with a one-time ChatGPT sign-in. They remain available for monitoring while another account is active in the Codex desktop app.
 - Reuse the desktop app's existing sign-in where supported; the exact integration still needs technical verification.
 
+## Account switching
+
+- Choose a connected account in YouSage to switch the Codex desktop app and Codex CLI together.
+- Keep the remaining connected accounts available for monitoring and future switches.
+- When the desktop app must restart, offer a clearly labeled "Restart Codex and switch" confirmation before closing it. The user should finish running tasks before confirming.
+
 ## Implementation approach
 
 - Use Tauri with a Rust core and an HTML/CSS interface. The user accepts a web-based interface within the desktop application.

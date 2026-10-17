@@ -22,7 +22,20 @@ export interface Snapshot {
   refreshing: boolean;
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
+  switching: string | null;
   settings: { startWithWindows: boolean; refreshSeconds: number };
+}
+
+export interface SwitchPlan {
+  id: string;
+  label: string;
+  desktopRunning: boolean;
+  cliRunning: boolean;
+}
+
+export function isActiveAccount(account: Account, accounts: Account[], activeAccountId: string | null): boolean {
+  const desktop = accounts.find(a => a.id === activeAccountId);
+  return account.id === activeAccountId || Boolean(account.identity && account.identity === desktop?.identity);
 }
 
 export function percentage(value: number | null | undefined): string {
