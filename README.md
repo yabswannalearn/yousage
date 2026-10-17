@@ -1,8 +1,32 @@
 # YouSage
 
-A small Windows desktop companion for Codex and Antigravity usage, built with Rust and Tauri.
+A small Windows desktop companion for **OpenAI Codex** and **Google Antigravity** usage, built with Rust and Tauri.
 
-The movable notch previews five-hour and weekly allowance for either the active Codex desktop account or a chosen Antigravity model group. Click it to expand a detail panel with all connected Codex accounts and local Antigravity model quotas. The panel opens above or below the notch to stay within the screen. Hide the notch to keep YouSage running in the Windows system tray.
+## About
+
+YouSage sits as a compact, movable notch on your Windows desktop so you can see your remaining **5-hour** and **weekly** AI coding allowances at a glance without interrupting your workflow:
+
+- **OpenAI Codex**: Monitor multiple ChatGPT accounts (such as Work and Personal) simultaneously and switch the active Codex desktop app and CLI account in one click.
+- **Google Antigravity**: Automatically track remaining quota across **Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon** via the local Antigravity CLI (`agy`).
+- **Configurable Notch Preview**: Choose whether the collapsed notch displays your active Codex account or any Antigravity model quota group.
+- **Zero Token Overhead**: Usage checks query local CLI/app-server endpoints directly without starting model turns or consuming tokens.
+- **System Tray & Auto-Start**: Hide the notch to the Windows system tray at any time while background monitoring continues.
+
+## Download & Install (Windows 10/11 x64)
+
+Grab the latest installer from [**GitHub Releases**](https://github.com/yabswannalearn/yousage/releases/latest):
+
+1. **Setup Wizard (Recommended)**: Download **`YouSage_0.1.0_x64-setup.exe`** and run the installer wizard.
+   - Installs per-user (no Administrator prompt required), adds Start Menu / Desktop shortcuts, and registers an uninstaller in Windows *Installed apps*.
+2. **Portable Executable**: Download **`yousage.exe`** if you prefer a standalone single-file binary you can place in any folder.
+
+> **Note on Windows SmartScreen**: Because YouSage is an open-source build without a paid EV code-signing certificate, Windows Defender SmartScreen may show *"Windows protected your PC"* on first launch. Click **More info** → **Run anyway**.
+
+### Prerequisites on the user's PC
+
+YouSage reads usage from the tools already installed on your machine (neither is bundled inside YouSage):
+- For **Codex** monitoring: [OpenAI Codex desktop app / CLI](https://chatgpt.com/codex) signed in on your PC.
+- For **Antigravity** monitoring: Google Antigravity (`agy`) installed and signed in on your PC.
 
 ## Run from source
 
