@@ -21,6 +21,7 @@
 - Antigravity usage follows the active local Google Antigravity CLI (`agy`) sign-in automatically.
 - Claude subscription usage follows the local Claude Code sign-in and can be selected in the notch independently from Antigravity's Claude model quotas.
 - Settings provides a custom accent color and a show/hide switch for each subscription. Hiding preserves sign-ins and preferences and removes the subscription from the notch, detail panel, tray readings, and alerts. Restore it at any time in Settings, including when all subscriptions are hidden.
+- Settings → Appearance lets the person choose the whole app's background and UI accent, with live preview, readable light/dark text, saved preferences, and a reset to the original app colors. Subscription accent preferences remain independent.
 - Dragging an expanded notch preserves the visible detail panel throughout the gesture and does not treat the release as a toggle click.
 
 ## Account switching

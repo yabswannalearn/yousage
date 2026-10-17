@@ -1,3 +1,5 @@
+import type { AppTheme } from './theme';
+
 export interface UsageWindow {
   remaining: number;
   resetsAt: number | null;
@@ -99,7 +101,7 @@ export interface Snapshot {
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
   switching: string | null;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[] };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme };
 }
 
 export interface SwitchPlan {

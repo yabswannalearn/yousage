@@ -15,6 +15,8 @@ YouSage is a small instrument for checking Codex, Google Antigravity, and Claude
 
 Subscription accent colors are customizable in Settings. Keep shared surfaces and text neutral so multiple subscription colors remain distinguishable together.
 
+Settings → Appearance controls the app background and UI accent independently of subscription colors. Derive card surfaces, inset controls, borders, and readable text from the chosen background; apply the UI accent to the brand mark and shared controls. Preview picker changes immediately, save the chosen colors, and provide a reset to charcoal/sage. Palette text colors target a [minimum 4.5:1 contrast ratio](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum); subscription bars retain their chosen colors.
+
 Use Segoe UI Variable/Segoe UI for labels and headings, and Cascadia Mono/Consolas for tabular percentage data. Keep all fonts local.
 
 ## Layout and signature
