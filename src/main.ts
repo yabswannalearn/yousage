@@ -1,6 +1,7 @@
 import './style.css';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { defaultAppTheme, themePalette, readableAccent, type AppTheme } from './theme';
 import {
   escapeHtml as esc,
   freshness,
@@ -40,7 +41,7 @@ let snapshot: Snapshot = {
   desktopError: null,
   login: null,
   switching: null,
-  settings: { startWithWindows: true, refreshSeconds: 60, notchSource: 'codex', notificationsEnabled: true, providerColors: { ...defaultProviderColors }, hiddenProviders: [] },
+  settings: { startWithWindows: true, refreshSeconds: 60, notchSource: 'codex', notificationsEnabled: true, providerColors: { ...defaultProviderColors }, hiddenProviders: [], appTheme: { ...defaultAppTheme } },
 };
 let expanded = false;
 let upward = false;
@@ -145,6 +146,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       notificationsEnabled: typeof args?.notificationsEnabled === 'boolean' ? args.notificationsEnabled : snapshot.settings.notificationsEnabled,
       providerColors: (args?.providerColors as Snapshot['settings']['providerColors']) ?? snapshot.settings.providerColors,
       hiddenProviders: (args?.hiddenProviders as Provider[]) ?? snapshot.settings.hiddenProviders,
+      appTheme: (args?.appTheme as AppTheme) ?? snapshot.settings.appTheme,
     };
   } else if (command === 'connect_account') {
     throw new Error('Account sign-in is available in the Windows app. This screen uses preview data.');
@@ -163,7 +165,24 @@ function smallReading(label: string, window: UsageWindow | null, provider: Provi
 
 const visible = (provider: Provider) => !snapshot.settings.hiddenProviders.includes(provider);
 const notchSource = () => effectiveNotchSource(snapshot.settings.notchSource, snapshot.settings.hiddenProviders);
-const accentStyle = (provider: Provider) => `style="--sage:${providerColor(snapshot.settings.providerColors, provider)}"`;
+const accentStyle = (provider: Provider) => {
+  const color = providerColor(snapshot.settings.providerColors, provider);
+  return `style="--sage:${color};--accent-ink:${readableAccent(color, themePalette(snapshot.settings.appTheme)['--card'])}"`;
+};
+
+function applyAppTheme(theme: AppTheme) {
+  const palette = themePalette(theme);
+  for (const [property, value] of Object.entries(palette)) root.style.setProperty(property, value);
+  for (const element of root.querySelectorAll<HTMLElement>('[style]')) {
+    const accent = element.style.getPropertyValue('--sage');
+    if (accent) element.style.setProperty('--accent-ink', readableAccent(accent, palette['--card']));
+  }
+}
+
+function appearanceSettings() {
+  const theme = snapshot.settings.appTheme ?? defaultAppTheme;
+  return `<div class="appearance-settings"><div class="settings-heading"><h3>Appearance</h3><button type="button" class="text-button" data-action="reset-app-theme">Reset colors</button></div><p class="fine-print">Applies to the whole notch and detail panel.</p>${(['background', 'accent'] as const).map(key => `<label class="setting-row" for="app-${key}"><span>${key === 'background' ? 'App background' : 'UI accent'}</span><span class="color-control"><span class="color-value" data-theme-value="${key}">${esc(theme[key])}</span><input type="color" id="app-${key}" aria-label="${key === 'background' ? 'App background' : 'UI accent'}" data-theme="${key}" value="${esc(theme[key])}"/></span></label>`).join('')}</div>`;
+}
 
 function claudeSection() {
   if (!visible('claude')) return '';
@@ -267,7 +286,7 @@ function settingsPanel() {
       : update.updateAvailable && update.latestVersion
         ? `Update v${update.latestVersion} available`
         : `Up to date (v${update.currentVersion})`;
-  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div><label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label><div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Low-allowance & reset alerts</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
+  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${appearanceSettings()}<label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label><div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Low-allowance & reset alerts</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
 }
 
 function addPanel() {
@@ -279,6 +298,7 @@ function addPanel() {
 
 function render() {
   if (dragging || colorPickerOpen) return;
+  applyAppTheme(snapshot.settings.appTheme ?? defaultAppTheme);
   const focused = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
   const focusTarget = focused ? { id: focused.id, action: focused.dataset.action, accountId: focused.dataset.id, restore: document.hasFocus() } : null;
   const preserved = focused instanceof HTMLInputElement && ['text', 'search'].includes(focused.type) ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
@@ -405,7 +425,8 @@ root.addEventListener('click', event => {
     case 'toggle': if (!suppressToggleClick) void attempt(() => toggle()); break;
     case 'refresh': void attempt(() => call('refresh_usage')); break;
     case 'hide': void attempt(async () => { await call('hide_notch'); expanded = false; if (preview) root.style.height = '80px'; }); break;
-    case 'settings': settingsOpen = !settingsOpen; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'end' }); break;
+    case 'settings': settingsOpen = !settingsOpen; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'start' }); break;
+    case 'reset-app-theme': void attempt(() => call('update_settings', { ...snapshot.settings, appTheme: { ...defaultAppTheme } })); break;
     case 'add': adding = true; error = ''; render(); document.getElementById('account-label')?.focus(); break;
     case 'cancel-add': adding = false; render(); break;
     case 'cancel-login': void attempt(() => call('cancel_sign_in')); break;
@@ -466,8 +487,23 @@ root.addEventListener('submit', event => {
   if (form.dataset.form === 'rename-agy') void attempt(async () => { await call('rename_antigravity_account', { id: form.dataset.id, label }); managingAgy = null; });
 });
 
+root.addEventListener('input', event => {
+  const input = event.target as HTMLInputElement;
+  if (!input.dataset.theme) return;
+  const key = input.dataset.theme as keyof AppTheme;
+  applyAppTheme({ ...(snapshot.settings.appTheme ?? defaultAppTheme), [key]: input.value });
+  const value = root.querySelector<HTMLElement>(`[data-theme-value="${key}"]`);
+  if (value) value.textContent = input.value;
+});
+
 root.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
+  if (input.dataset.theme) {
+    colorPickerOpen = false;
+    const key = input.dataset.theme as keyof AppTheme;
+    void attempt(() => call('update_settings', { ...snapshot.settings, appTheme: { ...(snapshot.settings.appTheme ?? defaultAppTheme), [key]: input.value } }));
+    return;
+  }
   if (input.dataset.color || input.dataset.visibility) {
     colorPickerOpen = false;
     const provider = (input.dataset.color ?? input.dataset.visibility) as Provider;
@@ -485,7 +521,7 @@ root.addEventListener('change', event => {
 });
 
 root.addEventListener('pointerdown', event => {
-  colorPickerOpen = Boolean((event.target as HTMLElement).dataset.color);
+  colorPickerOpen = Boolean((event.target as HTMLElement).dataset.color || (event.target as HTMLElement).dataset.theme);
   if (event.button !== 0 || !(event.target as Element).closest('#notch-toggle')) return;
   suppressToggleClick = false;
   if (!native || transition) return;
@@ -503,7 +539,7 @@ root.addEventListener('pointerdown', event => {
 
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && colorPickerOpen) { colorPickerOpen = false; render(); return; }
-  if ((event.target as HTMLElement).dataset.color && ['Enter', ' '].includes(event.key)) colorPickerOpen = true;
+  if (((event.target as HTMLElement).dataset.color || (event.target as HTMLElement).dataset.theme) && ['Enter', ' '].includes(event.key)) colorPickerOpen = true;
   if (['Enter', ' '].includes(event.key) && (event.target as Element).closest('#notch-toggle')) suppressToggleClick = false;
   if (event.key === 'Escape' && expanded) void attempt(() => toggle(false));
 });

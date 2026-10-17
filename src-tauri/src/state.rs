@@ -1,4 +1,4 @@
-use crate::{model::{evaluate_alerts, parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, ClaudeStatus, ProviderColors, Point, UpdateStatus}, rpc::{self, Rpc}};
+use crate::{model::{evaluate_alerts, parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, ClaudeStatus, ProviderColors, AppTheme, Point, UpdateStatus}, rpc::{self, Rpc}};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, fs, path::PathBuf, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}, time::{SystemTime, UNIX_EPOCH}};
@@ -24,6 +24,7 @@ pub struct Config {
     pub notifications_enabled: bool,
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
+    pub app_theme: AppTheme,
 }
 
 impl Default for Config {
@@ -40,6 +41,7 @@ impl Default for Config {
             notifications_enabled: true,
             provider_colors: ProviderColors::default(),
             hidden_providers: vec![],
+            app_theme: AppTheme::default(),
         }
     }
 }
@@ -53,6 +55,7 @@ pub struct Settings {
     pub notifications_enabled: bool,
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
+    pub app_theme: AppTheme,
 }
 
 #[derive(Clone, Serialize)]
@@ -99,6 +102,7 @@ impl AppState {
         let mut config: Config = fs::read(directory.join("settings.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         config.refresh_seconds = config.refresh_seconds.clamp(30, 600);
         if config.notch_source.is_empty() { config.notch_source = "codex".into(); }
+        if !config.app_theme.valid() { config.app_theme = AppTheme::default(); }
         if !config.provider_colors.valid() { config.provider_colors = ProviderColors::default(); }
         let mut cached: Vec<Account> = fs::read(directory.join("usage-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         cached.retain(|a| a.desktop || config.profiles.iter().any(|p| p.id == a.id));
@@ -126,6 +130,7 @@ impl AppState {
                 notifications_enabled: config.notifications_enabled,
                 provider_colors: config.provider_colors.clone(),
                 hidden_providers: config.hidden_providers.clone(),
+                app_theme: config.app_theme.clone(),
             },
         };
         Ok(Self {
@@ -642,11 +647,13 @@ pub fn update_settings(
     notifications_enabled: Option<bool>,
     provider_colors: Option<ProviderColors>,
     hidden_providers: Option<Vec<String>>,
+    app_theme: Option<AppTheme>,
 ) -> Result<(), String> {
     if !(30..=600).contains(&refresh_seconds) { return Err("Choose a refresh interval between 30 seconds and 10 minutes.".into()) }
     if let Some(ref source) = notch_source {
         if !valid_notch_source(source) { return Err("Choose a valid notch preview source.".into()) }
     }
+    if app_theme.as_ref().is_some_and(|theme| !theme.valid()) { return Err("Choose a valid six-digit hex color for the app background and accent.".into()) }
     if provider_colors.as_ref().is_some_and(|colors| !colors.valid()) { return Err("Choose a valid six-digit hex color for each subscription.".into()) }
     if hidden_providers.as_ref().is_some_and(|hidden| hidden.iter().any(|p| !["codex", "antigravity", "claude"].contains(&p.as_str()))) { return Err("Choose a valid subscription to hide.".into()) }
     if !cfg!(debug_assertions) {
@@ -654,7 +661,7 @@ pub fn update_settings(
             .map_err(|_| "Windows could not update the startup setting.")?;
     }
     let state = app.state::<AppState>();
-    let (resolved_source, resolved_notifications, resolved_colors, resolved_hidden) = {
+    let (resolved_source, resolved_notifications, resolved_colors, resolved_hidden, resolved_theme) = {
         let mut config = state.config.lock().unwrap();
         config.start_with_windows = start_with_windows;
         config.refresh_seconds = refresh_seconds;
@@ -662,7 +669,8 @@ pub fn update_settings(
         if let Some(enabled) = notifications_enabled { config.notifications_enabled = enabled; }
         if let Some(colors) = provider_colors { config.provider_colors = colors; }
         if let Some(hidden) = hidden_providers { config.hidden_providers = hidden; }
-        (config.notch_source.clone(), config.notifications_enabled, config.provider_colors.clone(), config.hidden_providers.clone())
+        if let Some(theme) = app_theme { config.app_theme = theme; }
+        (config.notch_source.clone(), config.notifications_enabled, config.provider_colors.clone(), config.hidden_providers.clone(), config.app_theme.clone())
     };
     state.snapshot.lock().unwrap().settings = Settings {
         start_with_windows,
@@ -671,6 +679,7 @@ pub fn update_settings(
         notifications_enabled: resolved_notifications,
         provider_colors: resolved_colors,
         hidden_providers: resolved_hidden,
+        app_theme: resolved_theme,
     };
     state.persist()?;
     state.emit(&app);
@@ -688,16 +697,21 @@ mod tests {
         assert_eq!(config.desktop_label.as_deref(), Some("Personal"));
         assert!(config.hidden_providers.is_empty());
         assert_eq!(config.provider_colors, ProviderColors::default());
+        assert_eq!(config.app_theme, AppTheme::default());
     }
 
     #[test]
     fn colors_and_hidden_subscriptions_survive_saved_settings() {
         let mut config = Config::default();
         config.provider_colors.codex = "#ff66aa".into();
+        config.app_theme = AppTheme { background: "#e9e4ff".into(), accent: "#8b45ce".into() };
         config.hidden_providers = vec!["claude".into(), "antigravity".into()];
         let restored: Config = serde_json::from_slice(&serde_json::to_vec(&config).unwrap()).unwrap();
         assert_eq!(restored.provider_colors.codex, "#ff66aa");
         assert_eq!(restored.hidden_providers, config.hidden_providers);
+        assert_eq!(restored.app_theme, config.app_theme);
+        assert!(restored.app_theme.valid());
+        assert!(!AppTheme { background: "#fff;display:none".into(), ..AppTheme::default() }.valid());
         assert!(valid_notch_source("claude"));
         assert!(!valid_notch_source("none"));
         config.provider_colors.claude = "#fff;display:none".into();

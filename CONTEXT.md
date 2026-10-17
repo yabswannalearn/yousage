@@ -4,6 +4,9 @@ YouSage lets a person keep track of Codex usage across their personal and work a
 
 ## Language
 
+**App theme**:
+The background and shared UI accent chosen under **Settings → Appearance**. It applies to the notch and detail panel, with derived readable text and control surfaces. Subscription colors are independent. **Reset colors** restores the charcoal/sage app theme while preserving subscription preferences.
+
 **Subscription**:
 A usage source shown in YouSage: Codex, Antigravity, or Claude. Each has a custom accent color and a visibility switch in Settings. Hiding a subscription keeps its sign-in and preferences, omits its readings and alerts, and lets the person restore it later. Background usage checks continue while hidden. If all are hidden, Settings remain accessible.
 

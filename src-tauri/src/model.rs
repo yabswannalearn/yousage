@@ -89,6 +89,25 @@ impl ProviderColors {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AppTheme {
+    pub background: String,
+    pub accent: String,
+}
+
+impl Default for AppTheme {
+    fn default() -> Self { Self { background: "#202221".into(), accent: "#b7c8b1".into() } }
+}
+
+impl AppTheme {
+    pub fn valid(&self) -> bool {
+        [&self.background, &self.accent].into_iter().all(|color| {
+            color.len() == 7 && color.starts_with('#') && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Alert {

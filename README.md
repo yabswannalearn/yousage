@@ -75,6 +75,8 @@ This feature supports Codex 0.160's file and encrypted Windows credential storag
 
 ## Claude usage and subscription settings
 
+Open **Settings → Appearance** to choose the background and UI accent for the whole app. Changes preview immediately across the compact notch, detail panel, cards, and controls; text adapts for light or dark backgrounds. **Reset colors** restores the original charcoal/sage app theme. Subscription accent colors are configured separately under **Subscriptions** and keep their saved values.
+
 Claude appears in its own section, separate from Claude models offered through Antigravity. YouSage reads the existing Claude Code subscription sign-in from `%USERPROFILE%\.claude` (or `CLAUDE_CONFIG_DIR`). If the sign-in is missing or expired, run `claude auth login` and refresh YouSage. Token refresh and sign-in stay with Claude Code.
 
 Claude usage checks call the read-only account metadata endpoint, without sending prompts or starting model turns. This endpoint is an internal Claude API and can change. YouSage checks at most once every five minutes, keeps last known readings on network errors, and backs off at least fifteen minutes after rate limiting. It honors a longer numeric `Retry-After` header. Credentials never enter the interface or YouSage's settings/cache files. See [Claude Code authentication](https://code.claude.com/docs/en/authentication) and [the upstream usage endpoint report](https://github.com/anthropics/claude-code/issues/30930).
