@@ -162,12 +162,16 @@ pub fn copy_antigravity_auth(from_root: &Path, to_root: &Path) -> Result<(), Str
 }
 
 pub async fn read_antigravity_in(user_root: Option<&Path>) -> Result<(Option<String>, Vec<crate::model::AntigravityGroup>, Option<String>), String> {
+    let source = user_root.map(|root| root.join(".gemini")).unwrap_or_else(antigravity_home);
+    let usage_home = UsageHome::new(&source)?;
     let mut command = Command::new(antigravity_executable());
     command.args(["-p", "/usage", "--output-format", "json"])
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-    if let Some(root) = user_root {
-        command.env("USERPROFILE", root).env("HOME", root).env("GEMINI_CLI_HOME", root.join(".gemini"));
-    }
+    // agy starts configured MCP servers even for /usage. Give quota checks an
+    // auth-only home and working directory, with no user/project MCP settings.
+    let root = usage_home.directory.path();
+    command.current_dir(root).env("USERPROFILE", root).env("HOME", root)
+        .env("GEMINI_CLI_HOME", root.join(".gemini"));
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW: never flash a console.
     let output = timeout(Duration::from_secs(25), command.output()).await
@@ -181,10 +185,59 @@ pub async fn read_antigravity_in(user_root: Option<&Path>) -> Result<(Option<Str
     if response["status"].as_str() != Some("SUCCESS") {
         return Err("Antigravity could not complete the usage check. Sign in with 'agy' and retry.".to_owned())
     }
+    usage_home.save_refreshed_auth()?;
     let groups = crate::model::parse_antigravity_usage(&response);
     let error = groups.is_empty().then(|| "Antigravity did not return model quota groups for this account.".to_owned());
     let email = user_root.and_then(antigravity_email_in).or_else(antigravity_email);
     Ok((email, groups, error))
+}
+
+struct UsageHome {
+    directory: tempfile::TempDir,
+    source: PathBuf,
+    original: Vec<Option<zeroize::Zeroizing<Vec<u8>>>>,
+}
+
+impl UsageHome {
+    fn new(source: &Path) -> Result<Self, String> {
+        let directory = tempfile::Builder::new().prefix("yousage-usage-").tempdir()
+            .map_err(|_| "Could not prepare a background usage check.".to_owned())?;
+        let mut original = Vec::new();
+        for name in ANTIGRAVITY_AUTH_FILES {
+            let bytes = match std::fs::read(source.join(name)) {
+                Ok(bytes) => Some(zeroize::Zeroizing::new(bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err("Could not read the Antigravity sign-in.".into()),
+            };
+            if let Some(bytes) = &bytes {
+                let target = directory.path().join(".gemini").join(name);
+                std::fs::create_dir_all(target.parent().unwrap()).and_then(|_| std::fs::write(target, bytes))
+                    .map_err(|_| "Could not prepare the Antigravity sign-in for usage.".to_owned())?;
+            }
+            original.push(bytes);
+        }
+        Ok(Self { directory, source: source.to_owned(), original })
+    }
+
+    fn save_refreshed_auth(&self) -> Result<(), String> {
+        // Another CLI may have refreshed or switched accounts while we queried.
+        // Never replace credentials that changed since the check started.
+        for (name, original) in ANTIGRAVITY_AUTH_FILES.iter().zip(&self.original) {
+            let current = std::fs::read(self.source.join(name)).ok().map(zeroize::Zeroizing::new);
+            if current != *original { return Err("Antigravity sign-in changed during usage checking. Refresh again.".into()) }
+        }
+        for (name, original) in ANTIGRAVITY_AUTH_FILES.iter().zip(&self.original) {
+            let refreshed = std::fs::read(self.directory.path().join(".gemini").join(name)).ok().map(zeroize::Zeroizing::new);
+            if let Some(bytes) = refreshed.filter(|bytes| original.as_ref() != Some(bytes)) {
+                let target = self.source.join(name);
+                std::fs::create_dir_all(target.parent().unwrap()).map_err(|_| "Could not save the refreshed Antigravity sign-in.")?;
+                let mut file = tempfile::NamedTempFile::new_in(target.parent().unwrap()).map_err(|_| "Could not save the refreshed Antigravity sign-in.")?;
+                std::io::Write::write_all(&mut file, &bytes).map_err(|_| "Could not save the refreshed Antigravity sign-in.")?;
+                file.persist(&target).map_err(|_| "Could not save the refreshed Antigravity sign-in.")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub async fn read_antigravity() -> Result<crate::model::AntigravityStatus, String> {
@@ -221,4 +274,42 @@ pub async fn fetch_latest_release(current_version: &str) -> Result<crate::model:
         return Err("No published release was found on GitHub.".to_owned())
     }
     Ok(crate::model::parse_github_release(&value, current_version))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quota_home_excludes_mcp_and_preserves_refreshed_credentials() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("oauth_creds.json"), b"old").unwrap();
+        std::fs::write(source.path().join("settings.json"), b"user settings").unwrap();
+        std::fs::create_dir(source.path().join("antigravity")).unwrap();
+        std::fs::write(source.path().join("antigravity/mcp_config.json"), b"MCP commands").unwrap();
+        let home = UsageHome::new(source.path()).unwrap();
+        let temporary = home.directory.path().to_owned();
+        assert!(!temporary.join(".gemini/settings.json").exists());
+        assert!(!temporary.join(".gemini/antigravity/mcp_config.json").exists());
+        let credential = temporary.join(".gemini/oauth_creds.json");
+        assert_eq!(std::fs::read(&credential).unwrap(), b"old");
+        std::fs::write(credential, b"refreshed").unwrap();
+        home.save_refreshed_auth().unwrap();
+        assert_eq!(std::fs::read(source.path().join("oauth_creds.json")).unwrap(), b"refreshed");
+        assert_eq!(std::fs::read(source.path().join("settings.json")).unwrap(), b"user settings");
+        drop(home);
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn quota_check_never_overwrites_a_concurrent_sign_in() {
+        let source = tempfile::tempdir().unwrap();
+        let credential = source.path().join("oauth_creds.json");
+        std::fs::write(&credential, b"old").unwrap();
+        let home = UsageHome::new(source.path()).unwrap();
+        std::fs::write(home.directory.path().join(".gemini/oauth_creds.json"), b"refreshed").unwrap();
+        std::fs::write(&credential, b"another account").unwrap();
+        assert!(home.save_refreshed_auth().is_err());
+        assert_eq!(std::fs::read(credential).unwrap(), b"another account");
+    }
 }
