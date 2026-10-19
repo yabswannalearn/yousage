@@ -16,8 +16,9 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _, _| desktop::show(app)))
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
-            state::get_snapshot, state::refresh_usage, state::dismiss_alert,
+            state::get_snapshot, state::refresh_usage, state::dismiss_alert, state::test_notification,
             state::save_antigravity_account, state::switch_antigravity_account, state::rename_antigravity_account, state::disconnect_antigravity_account,
             state::check_for_updates, state::open_release_url,
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
