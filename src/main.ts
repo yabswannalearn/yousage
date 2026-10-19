@@ -136,6 +136,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       hiddenProviders: (args?.hiddenProviders as Provider[]) ?? snapshot.settings.hiddenProviders,
       appTheme: (args?.appTheme as AppTheme) ?? snapshot.settings.appTheme,
     };
+  } else if (command === 'test_notification') {
+    throw new Error('Native notifications are available in the Windows app. This screen uses preview data.');
   } else if (command === 'connect_account') {
     throw new Error('Account sign-in is available in the Windows app. This screen uses preview data.');
   } else if (command === 'hide_notch') {
