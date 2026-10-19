@@ -208,10 +208,22 @@ struct UsageHome {
     original: Vec<Option<zeroize::Zeroizing<Vec<u8>>>>,
 }
 
+pub fn temporary_auth_home() -> Result<tempfile::TempDir, String> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("yousage-signin-");
+    // A custom Windows TEMP can be shared/readable by other local users.
+    // Keep temporary credentials under the current user's local app data.
+    #[cfg(windows)]
+    let directory = builder.tempdir_in(std::env::var_os("LOCALAPPDATA")
+        .ok_or("Windows local application data is unavailable.")?);
+    #[cfg(not(windows))]
+    let directory = builder.tempdir();
+    directory.map_err(|_| "Could not prepare a private sign-in directory.".into())
+}
+
 impl UsageHome {
     fn new(source: &Path) -> Result<Self, String> {
-        let directory = tempfile::Builder::new().prefix("yousage-usage-").tempdir()
-            .map_err(|_| "Could not prepare a background usage check.".to_owned())?;
+        let directory = temporary_auth_home()?;
         let mut original = Vec::new();
         for name in ANTIGRAVITY_AUTH_FILES {
             let bytes = match std::fs::read(source.join(name)) {
@@ -289,6 +301,13 @@ pub async fn fetch_latest_release(current_version: &str) -> Result<crate::model:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn temporary_credentials_use_private_local_app_data_instead_of_shared_temp() {
+        let directory = temporary_auth_home().unwrap();
+        assert_eq!(directory.path().parent(), Some(Path::new(&std::env::var_os("LOCALAPPDATA").unwrap())));
+    }
 
     #[test]
     fn quota_home_excludes_mcp_and_preserves_refreshed_credentials() {

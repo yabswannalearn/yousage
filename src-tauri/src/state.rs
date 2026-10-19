@@ -445,7 +445,7 @@ pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desk
         let target_home = state.antigravity_profile_home(&id)?;
         // Validate and refresh the target before interrupting any running work.
         rpc::read_antigravity_in(Some(&target_home)).await?;
-        let incoming = tempfile::tempdir().map_err(|_| "Could not stage the Antigravity sign-in.")?;
+        let incoming = rpc::temporary_auth_home()?;
         rpc::copy_antigravity_auth(&target_home, incoming.path())?;
         let runtime = crate::processes::inspect(crate::processes::Provider::Antigravity).await?;
         if runtime.running() && !restart_desktop { return Err("Review and confirm ‘Close sessions and switch’ before closing running apps and terminals.".into()) }
@@ -455,7 +455,7 @@ pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desk
         }
         let switched = async {
             let active = rpc::antigravity_home();
-            let backup = tempfile::tempdir().map_err(|_| "Could not back up the current Antigravity sign-in.")?;
+            let backup = rpc::temporary_auth_home()?;
             rpc::sync_antigravity_auth(&active, &backup.path().join(".gemini"))?;
             if let Some(current_email) = rpc::antigravity_email() {
                 let existing = {

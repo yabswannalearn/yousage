@@ -35,7 +35,7 @@ The Codex desktop connection follows `CODEX_HOME` (default `%USERPROFILE%\.codex
 
 Antigravity usage follows the active local sign-in in `%USERPROFILE%\.gemini` (reading only the non-secret active email from `google_accounts.json` and quota buckets from `agy`). YouSage never sends tokens to the interface or saves them in its settings/cache files.
 
-Each Antigravity quota check runs in a temporary auth-only home and working directory. User and project MCP settings, plugins, and hooks are not copied, so `/usage` cannot start configured MCP command windows. Temporary sign-in files are removed when the process finishes or times out. Refreshed credentials are saved back only if the source sign-in has not changed during the check; normal CLI configuration is never modified.
+Each Antigravity quota check runs in a temporary auth-only home and working directory. User and project MCP settings, plugins, and hooks are not copied, so `/usage` cannot start configured MCP command windows. Temporary sign-in files are kept under the user's local app data rather than a potentially shared Windows `TEMP`, and removed when the process finishes or times out. Switch staging/backups use the same location. Refreshed credentials are saved back only if the source sign-in has not changed during the check; normal CLI configuration is never modified.
 
 `YOUSAGE_CODEX_BIN` and `YOUSAGE_ANTIGRAVITY_BIN` can select specific Codex or Antigravity (`agy`) executables if installed outside their usual locations.
 
