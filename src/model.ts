@@ -105,6 +105,8 @@ export interface Snapshot {
 }
 
 export interface SwitchPlan {
+  provider: 'codex' | 'antigravity';
+  processNames: string[];
   id: string;
   label: string;
   desktopRunning: boolean;

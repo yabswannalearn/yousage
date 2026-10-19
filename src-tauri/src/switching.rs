@@ -6,7 +6,7 @@ use tauri::{AppHandle, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SwitchPlan { pub id: String, pub label: String, pub desktop_running: bool, pub cli_running: bool }
+pub struct SwitchPlan { pub id: String, pub label: String, pub provider: &'static str, pub desktop_running: bool, pub cli_running: bool, pub process_names: Vec<String> }
 
 fn profile(state: &AppState, id: &str) -> Result<Profile, String> {
     state.config.lock().unwrap().profiles.iter().find(|p| p.id == id).cloned().ok_or_else(|| "Connect this account to YouSage before switching to it.".into())
@@ -17,8 +17,18 @@ pub async fn prepare_switch(app: AppHandle, id: String) -> Result<SwitchPlan, St
     let state = app.state::<AppState>();
     if state.login_running.load(Ordering::SeqCst) || state.switch_running.load(Ordering::SeqCst) { return Err("Finish the current sign-in or switch first.".into()) }
     let target = profile(&state, &id)?;
-    let runtime = processes::inspect().await?;
-    Ok(SwitchPlan { id, label: target.label, desktop_running: !runtime.desktop.is_empty(), cli_running: runtime.cli_running })
+    let runtime = processes::inspect(processes::Provider::Codex).await?;
+    Ok(SwitchPlan { id, label: target.label, provider: "codex", desktop_running: !runtime.desktop.is_empty(), cli_running: runtime.cli_running, process_names: runtime.session_names() })
+}
+
+#[tauri::command]
+pub async fn prepare_antigravity_switch(app: AppHandle, id: String) -> Result<SwitchPlan, String> {
+    let state = app.state::<AppState>();
+    if state.login_running.load(Ordering::SeqCst) || state.switch_running.load(Ordering::SeqCst) { return Err("Finish the current sign-in or switch first.".into()) }
+    let target = state.config.lock().unwrap().antigravity_profiles.iter().find(|p| p.id == id).cloned()
+        .ok_or("Save this Antigravity sign-in before switching to it.")?;
+    let runtime = processes::inspect(processes::Provider::Antigravity).await?;
+    Ok(SwitchPlan { id, label: target.label, provider: "antigravity", desktop_running: !runtime.desktop.is_empty(), cli_running: runtime.cli_running, process_names: runtime.session_names() })
 }
 
 fn status(app: &AppHandle, message: &str) {
@@ -75,12 +85,11 @@ async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Res
         return Err("The saved sign-in changed. Refresh the accounts and try again.".into())
     }
 
-    let runtime = processes::inspect().await?;
-    if runtime.cli_running { return Err("Close your Codex terminal sessions, then try switching again. New sessions will use the chosen account.".into()) }
-    if !runtime.desktop.is_empty() && !restart_desktop { return Err("Codex is running. Review and confirm ‘Restart Codex and switch’ first.".into()) }
-    if !runtime.desktop.is_empty() {
-        status(app, "Closing Codex…");
-        if let Err(error) = runtime.close_desktop().await { let _ = runtime.reopen_desktop(); return Err(error) }
+    let runtime = processes::inspect(processes::Provider::Codex).await?;
+    if runtime.running() && !restart_desktop { return Err("Review and confirm ‘Close sessions and switch’ before closing running apps and terminals.".into()) }
+    if runtime.running() {
+        status(app, "Closing Codex, ChatGPT, and related terminal sessions…");
+        if let Err(error) = runtime.close_sessions().await { let _ = runtime.reopen_desktop(); return Err(error) }
     }
 
     let result = async {
@@ -115,6 +124,9 @@ async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Res
         }
 
         status(app, "Switching desktop and CLI…");
+        if processes::inspect(processes::Provider::Codex).await?.running() {
+            return Err("A Codex or ChatGPT session started during the switch. No sign-in was changed. Review the sessions and retry.".into())
+        }
         let current_home = root.clone();
         let write = tauri::async_runtime::spawn_blocking(move || incoming.write(&current_home, store)).await.map_err(|_| "Could not switch the saved sign-in.")?;
         // A failed atomic replacement leaves the previous credential intact.

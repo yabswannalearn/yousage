@@ -432,41 +432,72 @@ pub async fn save_antigravity_account(app: AppHandle, label: String) -> Result<(
 }
 
 #[tauri::command]
-pub async fn switch_antigravity_account(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desktop: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
+    if state.login_running.load(Ordering::SeqCst) { return Err("Finish or cancel the current sign-in first.".into()) }
     if state.switch_running.swap(true, Ordering::SeqCst) { return Err("An account switch is already running.".into()) }
+    state.snapshot.lock().unwrap().switching = Some("Preparing the Antigravity account switch…".into()); state.emit(&app);
     let result = async {
         let _guard = state.io.lock().await;
+        if !state.config.lock().unwrap().antigravity_profiles.iter().any(|p| p.id == id) {
+            return Err("Save this Antigravity sign-in before switching to it.".into())
+        }
         let target_home = state.antigravity_profile_home(&id)?;
-        let active_root = rpc::antigravity_user_root();
-        if let Some(current_email) = rpc::antigravity_email() {
-            let existing = {
-                let config = state.config.lock().unwrap();
-                config.antigravity_profiles.iter().find_map(|p| {
-                    let home = state.antigravity_profile_home(&p.id).ok()?;
-                    rpc::antigravity_email_in(&home).filter(|e| e.eq_ignore_ascii_case(&current_email)).map(|_| p.id.clone())
-                })
-            };
-            let outgoing_id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            if let Ok(outgoing_home) = state.antigravity_profile_home(&outgoing_id) {
-                let src = active_root.clone();
-                let dst = outgoing_home.clone();
-                if tauri::async_runtime::spawn_blocking(move || rpc::copy_antigravity_auth(&src, &dst)).await.is_ok_and(|r| r.is_ok()) {
-                    let mut config = state.config.lock().unwrap();
-                    if !config.antigravity_profiles.iter().any(|p| p.id == outgoing_id) {
-                        let fallback = current_email.split('@').next().unwrap_or("Antigravity").to_owned();
-                        config.antigravity_profiles.push(Profile { id: outgoing_id, label: fallback });
-                    }
+        // Validate and refresh the target before interrupting any running work.
+        rpc::read_antigravity_in(Some(&target_home)).await?;
+        let incoming = tempfile::tempdir().map_err(|_| "Could not stage the Antigravity sign-in.")?;
+        rpc::copy_antigravity_auth(&target_home, incoming.path())?;
+        let runtime = crate::processes::inspect(crate::processes::Provider::Antigravity).await?;
+        if runtime.running() && !restart_desktop { return Err("Review and confirm ‘Close sessions and switch’ before closing running apps and terminals.".into()) }
+        if runtime.running() {
+            state.snapshot.lock().unwrap().switching = Some("Closing Antigravity and related terminal sessions…".into()); state.emit(&app);
+            if let Err(error) = runtime.close_sessions().await { let _ = runtime.reopen_desktop(); return Err(error) }
+        }
+        let switched = async {
+            let active = rpc::antigravity_home();
+            let backup = tempfile::tempdir().map_err(|_| "Could not back up the current Antigravity sign-in.")?;
+            rpc::sync_antigravity_auth(&active, &backup.path().join(".gemini"))?;
+            if let Some(current_email) = rpc::antigravity_email() {
+                let existing = {
+                    let config = state.config.lock().unwrap();
+                    config.antigravity_profiles.iter().find_map(|p| {
+                        let home = state.antigravity_profile_home(&p.id).ok()?;
+                        rpc::antigravity_email_in(&home).filter(|e| e.eq_ignore_ascii_case(&current_email)).map(|_| p.id.clone())
+                    })
+                };
+                let outgoing_id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let outgoing_home = state.antigravity_profile_home(&outgoing_id)?;
+                rpc::copy_antigravity_auth(backup.path(), &outgoing_home)?;
+                let mut config = state.config.lock().unwrap();
+                if !config.antigravity_profiles.iter().any(|p| p.id == outgoing_id) {
+                    let fallback = current_email.split('@').next().unwrap_or("Antigravity").to_owned();
+                    config.antigravity_profiles.push(Profile { id: outgoing_id, label: fallback });
                 }
             }
-        }
-        let dst = active_root.clone();
-        tauri::async_runtime::spawn_blocking(move || rpc::copy_antigravity_auth(&target_home, &dst))
-            .await.map_err(|_| "Could not switch the Antigravity sign-in.")??;
-        state.persist()?;
-        Ok::<(), String>(())
+            state.persist()?;
+            state.snapshot.lock().unwrap().switching = Some("Switching the Antigravity sign-in…".into()); state.emit(&app);
+            if crate::processes::inspect(crate::processes::Provider::Antigravity).await?.running() {
+                return Err("An Antigravity session started during the switch. No sign-in was changed. Review the sessions and retry.".into())
+            }
+            let replacement = async {
+                rpc::sync_antigravity_auth(&incoming.path().join(".gemini"), &active)?;
+                rpc::read_antigravity().await?;
+                Ok::<(), String>(())
+            }.await;
+            if let Err(error) = replacement {
+                return match rpc::sync_antigravity_auth(&backup.path().join(".gemini"), &active) {
+                    Ok(()) => Err(format!("{error} Your previous Antigravity sign-in was restored.")),
+                    Err(_) => Err("The switch failed and the previous Antigravity sign-in could not be restored. Sign in again with agy.".into()),
+                }
+            }
+            Ok::<(), String>(())
+        }.await;
+        let reopened = runtime.reopen_desktop();
+        switched?;
+        reopened
     }.await;
     state.switch_running.store(false, Ordering::SeqCst);
+    state.snapshot.lock().unwrap().switching = None; state.emit(&app);
     result?;
     refresh_all(app).await;
     Ok(())

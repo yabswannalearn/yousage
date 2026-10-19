@@ -23,6 +23,7 @@ await page.addInitScript(() => {
   window.testBridge = {
     dragging: false,
     calls: [],
+    snapshot,
     emit(event, payload = null) { callbacks.get(events.get(event))?.({ event, payload }); },
   };
   window.__TAURI_INTERNALS__ = {
@@ -32,6 +33,11 @@ await page.addInitScript(() => {
       window.testBridge.calls.push({ command, args });
       if (command === 'plugin:event|listen') { events.set(args.event, args.handler); return args.handler; }
       if (command === 'get_snapshot') return snapshot;
+      if (command === 'prepare_switch' || command === 'prepare_antigravity_switch') {
+        const antigravity = command === 'prepare_antigravity_switch';
+        if (window.testBridge.noSessions) return { id: args.id, label: 'Work', provider: 'codex', desktopRunning: false, cliRunning: false, processNames: [] };
+        return { id: args.id, label: antigravity ? 'AGY Work' : 'Work', provider: antigravity ? 'antigravity' : 'codex', desktopRunning: !antigravity, cliRunning: true, processNames: antigravity ? ['agy.exe', 'pwsh.exe'] : ['ChatGPT.exe', 'Codex.exe', 'pwsh.exe'] };
+      }
       if (command === 'set_expanded') {
         if (window.testBridge.dragging) await new Promise(resolve => { window.testBridge.finishResize = resolve; });
         document.getElementById('app').style.height = `${args.expanded ? args.height : 80}px`;
@@ -131,6 +137,36 @@ try {
   }
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.locator('.panel-scroll').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await page.evaluate(() => {
+    const snapshot = window.testBridge.snapshot;
+    snapshot.accounts.push({ ...snapshot.accounts[0], id: 'work', label: 'Work', identity: 'work', desktop: false });
+    snapshot.antigravity.accounts = [{ id: 'agy-work', label: 'AGY Work', email: 'agy-work@example.com', groups: snapshot.antigravity.groups, updatedAt: Date.now() / 1000, error: null, active: false }];
+    window.testBridge.emit('usage-updated', snapshot);
+  });
+  await page.locator('[data-action="prepare-switch"][data-id="work"]').click();
+  assert.match(await page.getByRole('dialog').innerText(), /unsaved work may be lost/);
+  assert.match(await page.getByRole('dialog').innerText(), /ChatGPT.exe, Codex.exe, pwsh.exe/);
+  assert.equal(await page.getByRole('button', { name: 'Close sessions and switch' }).isEnabled(), true, 'CLI sessions must allow confirmed force-close');
+  await page.getByRole('button', { name: 'Cancel account switch' }).click();
+  assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'switch_account').length), 0, 'cancel must not switch');
+  await page.locator('[data-action="prepare-switch"][data-id="work"]').click();
+  await page.getByRole('button', { name: 'Close sessions and switch' }).click();
+  assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'switch_account').args), { id: 'work', restartDesktop: true });
+  await page.evaluate(() => { window.testBridge.noSessions = true; });
+  await page.locator('[data-action="prepare-switch"][data-id="work"]').click();
+  await page.getByRole('button', { name: 'Switch account', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'switch_account').at(-1).args), { id: 'work', restartDesktop: false }, 'an empty plan must not authorize closing sessions that appear later');
+  await page.evaluate(() => { window.testBridge.noSessions = false; });
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Antigravity', exact: true }).check();
+  await page.getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('[data-action="switch-agy"][data-id="agy-work"]').click();
+  assert.match(await page.getByRole('dialog').innerText(), /Switch Antigravity account/);
+  assert.match(await page.getByRole('dialog').innerText(), /agy.exe, pwsh.exe/);
+  assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'switch_antigravity_account').length), 0, 'Antigravity must wait for confirmation');
+  await page.getByRole('button', { name: 'Close sessions and switch' }).click();
+  assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'switch_antigravity_account').args), { id: 'agy-work', restartDesktop: true });
   assert.deepEqual(failures, []);
-  console.log('Desktop UI passed: long drag, focus changes, release click, colors, Claude preview, hide/restore all providers.');
+  console.log('Desktop UI passed: drag, focus, themes, subscription visibility, native notification test, Codex/Antigravity switch confirmation and cancellation.');
 } finally { await browser.close(); }

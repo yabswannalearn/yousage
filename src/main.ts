@@ -79,9 +79,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (!preview) throw new Error('Open the YouSage desktop app to connect your accounts.');
   if (command === 'set_expanded') return { upward: params.has('up'), height: Math.min(Number(args?.height ?? 80), innerHeight - 64) } as T;
   if (command === 'get_snapshot') return snapshot as T;
+  if (command === 'prepare_antigravity_switch') {
+    const account = snapshot.antigravity.accounts?.find(a => a.id === args?.id)!;
+    return { id: account.id, label: account.label, provider: 'antigravity', desktopRunning: false, cliRunning: true, processNames: ['agy.exe', 'pwsh.exe'] } as T;
+  }
   if (command === 'prepare_switch') {
     const account = snapshot.accounts.find(a => a.id === args?.id)!;
-    return { id: account.id, label: account.label, desktopRunning: true, cliRunning: params.has('cli') } as T;
+    return { id: account.id, label: account.label, provider: 'codex', desktopRunning: true, cliRunning: params.has('cli'), processNames: ['Codex.exe', ...(params.has('cli') ? ['pwsh.exe'] : [])] } as T;
   }
   if (command === 'switch_account') {
     snapshot.switching = 'Switching desktop and CLI…'; render();
@@ -242,11 +246,12 @@ function antigravitySection() {
 }
 
 function switchPanel() {
-  if (!switchPlan && !snapshot.switching) return '';
-  if (snapshot.switching) return `<section class="switch-panel" role="status" aria-live="polite"><div class="switch-symbol">${icon('swap')}</div><h2>${esc(snapshot.switching)}</h2><p>The notch will update when the new account is ready.</p></section>`;
-  const plan = switchPlan!;
-  const current = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId).find(a => isActiveAccount(a, snapshot.accounts, snapshot.activeAccountId));
-  return `<section class="switch-panel" role="dialog" aria-labelledby="switch-title"><div class="section-heading"><h2 id="switch-title">Switch Codex account</h2>${iconButton('cancel-switch', 'x', 'Cancel account switch')}</div><div class="switch-route"><span>${esc(current?.label ?? 'Current sign-in')}</span>${icon('swap')}<strong>${esc(plan.label)}</strong></div><span class="switch-targets">Codex desktop + CLI</span><p>${plan.cliRunning ? 'Close your Codex terminal sessions first, then check again. Start new sessions after switching.' : plan.desktopRunning ? 'Finish any running tasks before continuing. Codex will close and reopen with this account.' : 'New Codex desktop and CLI sessions will use this account.'}</p>${plan.cliRunning ? `<button class="primary-button" data-action="prepare-switch" data-id="${esc(plan.id)}">Check again</button>` : `<button id="confirm-switch" class="primary-button" data-action="confirm-switch">${plan.desktopRunning ? 'Restart Codex and switch' : 'Switch desktop and CLI'}<span aria-hidden="true">→</span></button>`}<p class="switch-footnote">Your current account stays connected in YouSage.</p></section>`;
+  if (snapshot.switching) return `<section class="switch-panel" role="status"><h2>Switching account</h2><p>${esc(snapshot.switching)}</p></section>`;
+  if (!switchPlan) return '';
+  const plan = switchPlan;
+  const provider = plan.provider === 'antigravity' ? 'Antigravity' : 'Codex';
+  const running = plan.processNames.length > 0;
+  return `<section class="switch-panel" role="dialog" aria-labelledby="switch-title"><div class="section-heading"><h2 id="switch-title">Switch ${provider} account</h2>${iconButton('cancel-switch', 'x', 'Cancel account switch')}</div><div class="switch-route"><span>Current sign-in</span>${icon('swap')}<strong>${esc(plan.label)}</strong></div><span class="switch-targets">${provider} desktop + CLI</span><p>${running ? `Continuing force-closes these apps and related terminal sessions: ${plan.processNames.map(esc).join(', ')}. Running tasks will stop and unsaved work may be lost. Desktop apps will reopen after switching; start new terminal sessions yourself.` : `New ${provider} sessions will use this account. If a session starts before you confirm, the switch will ask you to check again.`}</p><button id="confirm-switch" class="primary-button" data-action="confirm-switch">${running ? 'Close sessions and switch' : 'Switch account'}<span aria-hidden="true">→</span></button><p class="switch-footnote">Your current account stays connected in YouSage.</p></section>`;
 }
 
 function settingsPanel() {
@@ -328,7 +333,7 @@ function render() {
   const notchTooltip = 'Click to expand · drag to move · Alt+Shift+U';
   const notchProvider = useClaude ? 'claude' : useAntigravity ? 'antigravity' : 'codex';
   root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${transition ? 'transitioning' : ''}`;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${esc(subtitle)}</span></span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${alertsBanner()}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : ''}${visible('codex') ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${switchPanel()}${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${esc(subtitle)}</span></span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${alertsBanner()}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : ''}${switchPanel()}${visible('codex') ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   if (scroll) scroll.scrollTop = scrollTop;
   if (preserved) {
@@ -385,11 +390,11 @@ async function attempt(action: () => Promise<unknown>) {
   render();
 }
 
-async function prepareSwitch(id: string) {
+async function prepareSwitch(id: string, provider: 'codex' | 'antigravity' = 'codex') {
   if (snapshot.switching || preparingSwitch) return;
   preparingSwitch = id; switchPlan = null; notice = ''; error = ''; render();
   try {
-    const plan = await call<SwitchPlan>('prepare_switch', { id });
+    const plan = await call<SwitchPlan>(provider === 'antigravity' ? 'prepare_antigravity_switch' : 'prepare_switch', { id });
     if (expanded) { switchPlan = plan; adding = false; managing = null; }
   } finally { preparingSwitch = null; render(); }
   const scroll = root.querySelector('.panel-scroll');
@@ -399,11 +404,11 @@ async function prepareSwitch(id: string) {
 
 async function confirmSwitch() {
   const plan = switchPlan;
-  if (!plan || plan.cliRunning || snapshot.switching) return;
+  if (!plan || snapshot.switching) return;
   switchPlan = null; snapshot.switching = 'Preparing the account switch…'; notice = ''; render();
   try {
-    await call('switch_account', { id: plan.id, restartDesktop: plan.desktopRunning });
-    notice = `Now using ${plan.label} in Codex desktop and new CLI sessions.`;
+    await call(plan.provider === 'antigravity' ? 'switch_antigravity_account' : 'switch_account', { id: plan.id, restartDesktop: plan.processNames.length > 0 });
+    notice = `Now using ${plan.label} in ${plan.provider === 'antigravity' ? 'Antigravity' : 'Codex'} desktop and new CLI sessions.`;
   } finally { snapshot.switching = null; render(); }
 }
 
@@ -424,12 +429,7 @@ root.addEventListener('click', event => {
     case 'manage-agy': managingAgy = managingAgy === id ? null : id!; disconnectAgyConfirmation = null; render(); break;
     case 'toggle-save-agy': savingAgy = !savingAgy; render(); document.getElementById('agy-save-label')?.focus(); break;
     case 'cancel-save-agy': savingAgy = false; render(); break;
-    case 'switch-agy':
-      if (id) void attempt(async () => {
-        await call('switch_antigravity_account', { id });
-        notice = 'Switched active Antigravity sign-in.';
-      });
-      break;
+    case 'switch-agy': if (id) void attempt(() => prepareSwitch(id, 'antigravity')); break;
     case 'disconnect-agy':
       if (disconnectAgyConfirmation !== id) { disconnectAgyConfirmation = id!; render(); }
       else void attempt(async () => { await call('disconnect_antigravity_account', { id }); managingAgy = null; disconnectAgyConfirmation = null; });

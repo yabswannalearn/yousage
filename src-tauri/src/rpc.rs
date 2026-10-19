@@ -141,22 +141,32 @@ pub fn copy_antigravity_auth(from_root: &Path, to_root: &Path) -> Result<(), Str
     if !src_gemini.join("oauth_creds.json").is_file() && !src_gemini.join("antigravity-cli/jetski_state.pbtxt").is_file() {
         return Err("No active Antigravity sign-in was found to save. Sign in with 'agy' first.".into());
     }
-    let dst_gemini = to_root.join(".gemini");
-    std::fs::create_dir_all(dst_gemini.join("antigravity-cli"))
-        .map_err(|_| "Could not prepare the Antigravity account profile folder.".to_owned())?;
-    let mut copied_any = false;
-    for rel in ANTIGRAVITY_AUTH_FILES {
-        let src = src_gemini.join(rel);
-        let dst = dst_gemini.join(rel);
-        if src.is_file() {
-            let tmp = dst.with_extension("tmp");
-            std::fs::copy(&src, &tmp).and_then(|_| std::fs::rename(&tmp, &dst))
-                .map_err(|_| "Could not copy Antigravity account credentials.".to_owned())?;
-            copied_any = true;
+    sync_antigravity_auth(&src_gemini, &to_root.join(".gemini"))
+}
+
+// Synchronize the complete auth set, including absence. Keeping an old token
+// file when the incoming account lacks it can select the outgoing account.
+// Empty sources are allowed for restoring a previously signed-out state.
+pub fn sync_antigravity_auth(source: &Path, destination: &Path) -> Result<(), String> {
+    for name in ANTIGRAVITY_AUTH_FILES {
+        let target = destination.join(name);
+        match std::fs::read(source.join(name)) {
+            Ok(bytes) => {
+                let bytes = zeroize::Zeroizing::new(bytes);
+                std::fs::create_dir_all(target.parent().unwrap()).map_err(|_| "Could not prepare Antigravity credentials.")?;
+                let mut file = tempfile::NamedTempFile::new_in(target.parent().unwrap()).map_err(|_| "Could not prepare Antigravity credentials.")?;
+                std::io::Write::write_all(&mut file, &bytes).map_err(|_| "Could not copy Antigravity credentials.")?;
+                file.persist(&target).map_err(|_| "Could not replace Antigravity credentials.")?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::remove_file(&target) {
+                    Ok(()) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => return Err("Could not clear outgoing Antigravity credentials.".into()),
+                }
+            }
+            Err(_) => return Err("Could not read Antigravity credentials.".into()),
         }
-    }
-    if !copied_any {
-        return Err("Antigravity credentials were not found.".into());
     }
     Ok(())
 }
@@ -311,5 +321,22 @@ mod tests {
         std::fs::write(&credential, b"another account").unwrap();
         assert!(home.save_refreshed_auth().is_err());
         assert_eq!(std::fs::read(credential).unwrap(), b"another account");
+    }
+
+    #[test]
+    fn switching_antigravity_removes_stale_auth_and_can_restore_signed_out_state() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("oauth_creds.json"), b"new account").unwrap();
+        std::fs::create_dir(destination.path().join("antigravity-cli")).unwrap();
+        std::fs::write(destination.path().join("antigravity-cli/jetski_state.pbtxt"), b"old account").unwrap();
+        std::fs::write(destination.path().join("settings.json"), b"settings").unwrap();
+        sync_antigravity_auth(source.path(), destination.path()).unwrap();
+        assert!(!destination.path().join("antigravity-cli/jetski_state.pbtxt").exists());
+        assert_eq!(std::fs::read(destination.path().join("oauth_creds.json")).unwrap(), b"new account");
+        let signed_out = tempfile::tempdir().unwrap();
+        sync_antigravity_auth(signed_out.path(), destination.path()).unwrap();
+        assert!(!destination.path().join("oauth_creds.json").exists());
+        assert_eq!(std::fs::read(destination.path().join("settings.json")).unwrap(), b"settings");
     }
 }
