@@ -5,6 +5,7 @@ use std::{collections::HashMap, fs, path::PathBuf, sync::{atomic::{AtomicBool, A
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_notification::NotificationExt;
 use tokio::time::{timeout, Duration, Instant};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -243,6 +244,12 @@ pub async fn refresh_all(app: AppHandle) {
         }
     };
     for alert in new_alerts {
+        // Deliver from the backend even while the webview/notch is hidden.
+        // Windows notification settings remain authoritative; in-app alerts
+        // are retained if the OS refuses a toast.
+        if let Err(error) = app.notification().builder().title(&alert.title).body(&alert.message).show() {
+            eprintln!("Could not show a usage notification: {error}");
+        }
         let _ = app.emit("usage-alert", alert);
     }
     state.emit(&app);
@@ -376,6 +383,16 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { state.snapshot.loc
 
 #[tauri::command]
 pub fn refresh_usage(app: AppHandle) { tauri::async_runtime::spawn(refresh_all(app)); }
+
+#[tauri::command]
+pub fn test_notification(app: AppHandle) -> Result<(), String> {
+    if !app.state::<AppState>().config.lock().unwrap().notifications_enabled {
+        return Err("Enable notifications before sending a test.".into())
+    }
+    app.notification().builder().title("YouSage notifications")
+        .body("Low-allowance and reset alerts will appear here, even while YouSage is hidden.")
+        .show().map_err(|_| "Windows could not show the notification. Check YouSage in Windows notification settings.".into())
+}
 
 #[tauri::command]
 pub fn dismiss_alert(app: AppHandle, id: String) {

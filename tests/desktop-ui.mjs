@@ -119,6 +119,11 @@ try {
   assert.match(await page.locator('.compact-title').innerText(), /Claude/, 'restoring the chosen source must restore its preview');
   const settingsSize = await page.locator('.settings-panel').evaluate(el => ({ width: el.clientWidth, content: el.scrollWidth }));
   assert.ok(settingsSize.content <= settingsSize.width, 'Settings must fit within the pill width');
+  await page.getByRole('button', { name: 'Send test notification', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'test_notification').length), 1);
+  await page.getByRole('checkbox', { name: 'Windows notifications', exact: true }).uncheck();
+  assert.equal(await page.getByRole('button', { name: 'Send test notification', exact: true }).isDisabled(), true);
+  await page.getByRole('checkbox', { name: 'Windows notifications', exact: true }).check();
   if (process.env.YOUSAGE_UI_SCREENSHOT) {
     await page.locator('.settings-panel').scrollIntoViewIfNeeded();
     await page.locator('.panel-scroll').evaluate(el => { el.scrollTop = el.scrollHeight; });

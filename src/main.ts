@@ -18,7 +18,6 @@ import {
   effectiveNotchSource,
   type Provider,
   type Account,
-  type Alert,
   type AntigravityAccount,
   type AntigravityGroup,
   type Snapshot,
@@ -74,17 +73,6 @@ const paths: Record<string, string> = {
 };
 const icon = (name: string) => `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? ''}</svg>`;
 const iconButton = (action: string, name: string, label: string, extra = '') => `<button type="button" class="icon-button" data-action="${action}" aria-label="${label}" title="${label}" ${extra}>${icon(name)}</button>`;
-
-function notifyDesktop(alert: Alert) {
-  if (!snapshot.settings.notificationsEnabled || !('Notification' in window)) return;
-  if (Notification.permission === 'granted') {
-    new Notification(alert.title, { body: alert.message, silent: false });
-  } else if (Notification.permission === 'default') {
-    void Notification.requestPermission().then(perm => {
-      if (perm === 'granted') new Notification(alert.title, { body: alert.message, silent: false });
-    });
-  }
-}
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (native) return invoke<T>(command, args);
@@ -286,7 +274,7 @@ function settingsPanel() {
       : update.updateAvailable && update.latestVersion
         ? `Update v${update.latestVersion} available`
         : `Up to date (v${update.currentVersion})`;
-  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${appearanceSettings()}<label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label><div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Low-allowance & reset alerts</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
+  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${appearanceSettings()}<label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label><div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Windows notifications</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><div class="setting-row"><span class="fine-print">Low-allowance & reset alerts</span><button type="button" class="subtle-button" data-action="test-notification" ${settings.notificationsEnabled ? '' : 'disabled'}>Send test notification</button></div><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
 }
 
 function addPanel() {
@@ -445,6 +433,7 @@ root.addEventListener('click', event => {
       else void attempt(async () => { await call('disconnect_antigravity_account', { id }); managingAgy = null; disconnectAgyConfirmation = null; });
       break;
     case 'dismiss-alert': if (id) void attempt(() => call('dismiss_alert', { id })); break;
+    case 'test-notification': void attempt(async () => { await call('test_notification'); notice = 'Test sent to Windows. Check Notification Center if no banner appears.'; }); break;
     case 'check-updates': void attempt(() => call('check_for_updates')); break;
     case 'open-release': {
       const url = target.dataset.url;
@@ -577,7 +566,6 @@ async function start() {
     return;
   }
   await listen<Snapshot>('usage-updated', event => { snapshot = event.payload; render(); });
-  await listen<Alert>('usage-alert', event => { notifyDesktop(event.payload); });
   await listen('hotkey-toggle', () => { if (!transition) void toggle(); });
   await listen('collapse-requested', () => { if (expanded && !transition && !dragging && !colorPickerOpen) void toggle(false); });
   await listen('notch-focused', () => { if (colorPickerOpen) { colorPickerOpen = false; render(); } });
