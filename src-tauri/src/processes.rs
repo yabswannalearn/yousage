@@ -64,7 +64,12 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
         Provider::Codex => p.name.eq_ignore_ascii_case("ChatGPT.exe"),
         Provider::Antigravity => p.name.eq_ignore_ascii_case("Antigravity.exe"),
     }).map(|p| p.process_id).collect();
-    let parents: HashMap<u32, u32> = processes.iter().map(|p| (p.process_id, p.parent_process_id)).collect();
+    let by_id: HashMap<_, _> = processes.iter().map(|p| (p.process_id, p)).collect();
+    // Windows can recycle the PID of an exited parent. A newer process with
+    // that PID is not the session's parent and must never become a kill root.
+    let parents: HashMap<u32, u32> = processes.iter()
+        .filter(|p| by_id.get(&p.parent_process_id).is_none_or(|parent| valid_parent(p, parent)))
+        .map(|p| (p.process_id, p.parent_process_id)).collect();
     let belongs_to_app = |mut pid| {
         for _ in 0..32 {
             if pid == own_pid || desktop_ids.contains(&pid) { return true }
@@ -74,9 +79,8 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
         }
         false
     };
-    let desktop: Vec<_> = processes.iter().filter(|p| desktop_ids.contains(&p.process_id) && !desktop_ids.contains(&p.parent_process_id))
+    let desktop: Vec<_> = processes.iter().filter(|p| desktop_ids.contains(&p.process_id) && !parents.get(&p.process_id).is_some_and(|parent| desktop_ids.contains(parent)))
         .filter_map(|p| p.executable_path.clone().map(|executable| Desktop { executable })).collect();
-    let by_id: HashMap<_, _> = processes.iter().map(|p| (p.process_id, p)).collect();
     let mut protected = HashSet::from([own_pid]);
     let mut ancestor = own_pid;
     for _ in 0..64 {
@@ -110,6 +114,7 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
         let mut parent = process.parent_process_id;
         for _ in 0..64 {
             let Some(candidate) = by_id.get(&parent) else { break };
+            if !valid_parent(root, candidate) { break }
             if candidate.process_id == candidate.parent_process_id { break }
             if desktop_ids.contains(&candidate.process_id) {
                 root = candidate;
@@ -226,6 +231,12 @@ fn same_process(a: &Process, b: &Process) -> bool {
     a.process_id == b.process_id && a.started.is_some() && a.started == b.started && a.executable_path == b.executable_path && a.name.eq_ignore_ascii_case(&b.name)
 }
 
+fn valid_parent(child: &Process, parent: &Process) -> bool {
+    child.parent_process_id == parent.process_id && child.started.as_deref().and_then(|value| value.parse::<u64>().ok())
+        .zip(parent.started.as_deref().and_then(|value| value.parse::<u64>().ok()))
+        .is_some_and(|(child, parent)| parent <= child)
+}
+
 fn store_app_target(executable: &Path) -> Option<String> {
     let package = executable.parent()?.parent()?;
     if !package.parent()?.file_name()?.to_string_lossy().eq_ignore_ascii_case("WindowsApps") { return None }
@@ -312,6 +323,16 @@ mod tests {
         assert!(!same_process(&old, &reused));
         assert!(!same_process(&reused, &reused));
         assert!(same_process(&old, &old));
+    }
+
+    #[test]
+    fn a_recycled_parent_pid_cannot_select_an_unrelated_terminal() {
+        let mut terminal = process(1, 0, "pwsh.exe", "unrelated shell");
+        terminal.started = Some("3".into());
+        let session = process(2, 1, "codex.exe", "codex");
+        let sessions = classify(&[terminal, session], 50, &HashSet::new(), Provider::Codex);
+        assert_eq!(sessions.targets.len(), 1);
+        assert_eq!(sessions.targets[0].process_id, 2);
     }
 
     #[test]
