@@ -24,7 +24,7 @@ fn main() {
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings,
             desktop::set_expanded, desktop::hide_notch, desktop::start_notch_drag,
-            switching::prepare_switch, switching::switch_account,
+            switching::prepare_switch, switching::prepare_antigravity_switch, switching::switch_account,
         ])
         .setup(|app| {
             let state = state::AppState::load(app.handle())?;
