@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, isBothNotch, selectedAntigravityGroup, suggestedCodexSwitch, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
-import { effectiveNotchSource, providerColor } from '../src/model.ts';
+import { effectiveNotchSource, providerColor, compactResetLabel } from '../src/model.ts';
+
+test('compact reset text preserves unknown and due states and rounds future minutes up', () => {
+  const now = 1000000;
+  assert.equal(compactResetLabel(null, now), 'Reset unknown');
+  assert.equal(compactResetLabel(999, now), 'Reset due');
+  assert.equal(compactResetLabel(1001, now), 'in 1m');
+  assert.equal(compactResetLabel(1000 + 3660, now), 'in 1h 1m');
+  assert.equal(compactResetLabel(1000 + 176400, now), 'in 2d 1h');
+});
 
 test('hidden subscriptions fall back without losing the preferred source or group', () => {
   assert.equal(effectiveNotchSource('both:gemini', ['codex']), 'antigravity:gemini');

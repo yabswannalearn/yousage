@@ -182,6 +182,16 @@ export function resetLabel(seconds: number | null | undefined, now = Date.now())
   return `Resets ${day}, ${time}`;
 }
 
+export function compactResetLabel(seconds: number | null | undefined, now = Date.now()): string {
+  if (seconds == null || !Number.isFinite(seconds)) return 'Reset unknown';
+  const minutes = Math.ceil((seconds * 1000 - now) / 60000);
+  if (minutes <= 0) return 'Reset due';
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `in ${hours}h ${minutes % 60}m`;
+  return `in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
 export function freshness(reading: { updatedAt: number | null; error: string | null }, now = Date.now()): string {
   if (reading.error) return reading.updatedAt ? 'Last known usage' : 'Usage unavailable';
   if (!reading.updatedAt) return 'Waiting for usage';

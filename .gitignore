@@ -8,3 +8,4 @@ src-tauri/gen/schemas/
 !.env.example
 *.log
 .DS_Store
+artifacts/docking/

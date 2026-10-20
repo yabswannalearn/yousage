@@ -45,6 +45,7 @@ The date and time when Codex, Antigravity, or Claude reports that a **Usage wind
 
 **Notch**:
 The compact, freely movable view of YouSage that previews the chosen **Notch preview**'s **Usage remaining**.
+It can float or attach to any edge of a monitor's usable area. Drag near an edge to dock, or away to float. Side docking uses a narrow vertical tab while the **Detail panel** remains horizontal.
 _Avoid_: Closed app, minimized app
 
 **Detail panel**:

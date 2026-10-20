@@ -39,6 +39,7 @@ await page.addInitScript(() => {
         return { id: args.id, label: antigravity ? 'AGY Work' : 'Work', provider: antigravity ? 'antigravity' : 'codex', desktopRunning: !antigravity, cliRunning: true, processNames: antigravity ? ['agy.exe', 'pwsh.exe'] : ['ChatGPT.exe', 'Codex.exe', 'pwsh.exe'] };
       }
       if (command === 'set_expanded') {
+        if (args.expanded && window.testBridge.delayResize) await new Promise(resolve => { window.testBridge.releaseResize = resolve; });
         if (window.testBridge.dragging) await new Promise(resolve => { window.testBridge.finishResize = resolve; });
         document.getElementById('app').style.height = `${args.expanded ? args.height : 80}px`;
         return { upward: false, height: args.expanded ? args.height : 80 };
@@ -53,8 +54,18 @@ await page.addInitScript(() => {
 });
 try {
   await page.goto('http://127.0.0.1:1420');
+  await page.evaluate(() => { window.testBridge.delayResize = true; });
   await page.locator('#notch-toggle').click();
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => window.testBridge.releaseResize);
+  assert.equal(await page.locator('.details').evaluate(el => getComputedStyle(el).visibility), 'hidden', 'details must stay concealed while native resize is pending');
+  await page.evaluate(() => { window.testBridge.delayResize = false; window.testBridge.releaseResize(); });
+  await page.waitForFunction(() => document.getElementById('app').classList.contains('opening'));
+  await page.evaluate(() => {
+    window.testBridge.motionShell = document.querySelector('.shell');
+    window.testBridge.emit('usage-updated', window.testBridge.snapshot);
+  });
+  assert.equal(await page.evaluate(() => window.testBridge.motionShell === document.querySelector('.shell')), true, 'usage updates must not restart the active animation');
+  await page.waitForTimeout(470);
   const header = page.locator('#notch-toggle');
   const rect = await header.boundingBox();
   await page.mouse.move(rect.x + 70, rect.y + 20);
@@ -75,7 +86,7 @@ try {
   await page.waitForTimeout(200);
   assert.equal(await header.getAttribute('aria-expanded'), 'true', 'a long drag release must not collapse the panel');
   await header.click();
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(320);
   assert.equal(await header.getAttribute('aria-expanded'), 'false', 'the next intentional click must still collapse');
   await header.click();
   await page.waitForTimeout(250);
@@ -105,7 +116,7 @@ try {
   await page.locator('#notch-source').selectOption('claude');
   assert.match(await page.locator('.compact-title').innerText(), /Claude/);
   assert.equal(await page.locator('.compact .small-reading').count(), 2);
-  assert.equal(await page.locator('section[aria-label="Claude usage"] .track').count(), 2);
+  assert.equal(await page.locator('section[aria-label="Claude usage"] .usage-ring').count(), 2);
   await page.getByRole('checkbox', { name: 'Claude', exact: true }).uncheck();
   assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 0);
   assert.match(await page.locator('.compact-title').innerText(), /Personal/);

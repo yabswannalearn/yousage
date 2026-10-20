@@ -7,6 +7,7 @@ import {
   freshness,
   percentage,
   resetLabel,
+  compactResetLabel,
   uniqueAccounts,
   isActiveAccount,
   isAntigravityNotch,
@@ -44,6 +45,19 @@ let snapshot: Snapshot = {
 };
 let expanded = false;
 let upward = false;
+type DockEdge = 'floating' | 'top' | 'bottom' | 'left' | 'right';
+type NotchLayout = { upward: boolean; height: number; width?: number; edge?: DockEdge };
+let dockEdge: DockEdge = 'floating';
+function applyLayout(layout: NotchLayout) {
+  upward = layout.upward;
+  dockEdge = layout.edge ?? 'floating';
+  root.dataset.edge = dockEdge;
+  root.classList.toggle('upward', upward);
+  if (preview) {
+    root.style.width = `${layout.width ?? 440}px`;
+    root.style.height = `${layout.height}px`;
+  }
+}
 let settingsOpen = false;
 let adding = false;
 let savingAgy = false;
@@ -53,7 +67,12 @@ let disconnectConfirmation: string | null = null;
 let disconnectAgyConfirmation: string | null = null;
 let error = '';
 let transition = false;
+let opening = false;
+let preparingOpen = false;
 let desiredHeight = 0;
+const OPEN_MS = 420;
+const CLOSE_MS = 240;
+const motionMs = (duration: number) => matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : duration;
 let suppressToggleClick = false;
 let dragging = false;
 let colorPickerOpen = false;
@@ -77,7 +96,12 @@ const iconButton = (action: string, name: string, label: string, extra = '') => 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (native) return invoke<T>(command, args);
   if (!preview) throw new Error('Open the YouSage desktop app to connect your accounts.');
-  if (command === 'set_expanded') return { upward: params.has('up'), height: Math.min(Number(args?.height ?? 80), innerHeight - 64) } as T;
+  if (command === 'set_expanded') {
+    const edge = dockEdge;
+    const side = edge === 'left' || edge === 'right';
+    const compact = side ? 184 : edge === 'floating' ? 80 : 40;
+    return { edge, width: side && !args?.expanded ? 58 : side || edge === 'floating' ? 440 : 480, upward: edge === 'bottom' || (edge === 'floating' && params.has('up')), height: args?.expanded ? Math.min(Math.max(compact, Number(args?.height ?? 80)), innerHeight - 64) : compact } as T;
+  }
   if (command === 'get_snapshot') return snapshot as T;
   if (command === 'prepare_antigravity_switch') {
     const account = snapshot.antigravity.accounts?.find(a => a.id === args?.id)!;
@@ -151,10 +175,15 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   return undefined as T;
 }
 
+function usageRing(label: string, value: number | null | undefined) {
+  const known = value != null && Number.isFinite(value);
+  const remaining = known ? Math.min(100, Math.max(0, value)) : 0;
+  return `<svg class="usage-ring ${known ? '' : 'unknown'}" viewBox="0 0 36 36" role="meter" aria-label="${esc(label)} remaining" aria-valuemin="0" aria-valuemax="100" ${known ? `aria-valuenow="${remaining}"` : 'aria-valuetext="Unavailable"'}><circle class="ring-track" cx="18" cy="18" r="15"/><circle class="ring-value" cx="18" cy="18" r="15" pathLength="100" stroke-dasharray="${remaining} 100"/></svg>`;
+}
+
 function smallReading(label: string, window: UsageWindow | null, provider: Provider) {
   const value = window?.remaining;
-  const width = value == null ? 0 : Math.min(100, Math.max(0, value));
-  return `<span class="small-reading ${value != null && value <= 20 ? 'low' : ''}" style="--sage:${providerColor(snapshot.settings.providerColors, provider)}"><span class="reading-label">${label}</span><strong>${percentage(value)}</strong><span class="micro-track"><span style="width:${width}%"></span></span></span>`;
+  return `<span class="small-reading ${value != null && value <= 20 ? 'low' : ''}" style="--sage:${providerColor(snapshot.settings.providerColors, provider)}" title="${esc(window ? resetLabel(window.resetsAt) : 'Usage unavailable')}">${usageRing(label, value)}<span class="reading-copy"><span class="reading-line"><span class="reading-label">${label}</span><strong>${percentage(value)}</strong></span><span class="reading-reset" data-reset-at="${window?.resetsAt ?? ''}">${esc(compactResetLabel(window?.resetsAt))}</span></span></span>`;
 }
 
 const visible = (provider: Provider) => !snapshot.settings.hiddenProviders.includes(provider);
@@ -187,8 +216,7 @@ function claudeSection() {
 
 function limitRow(label: string, window: UsageWindow | null) {
   const value = window?.remaining;
-  const width = value == null ? 0 : Math.min(100, Math.max(0, value));
-  return `<div class="limit ${value != null && value <= 20 ? 'low' : ''}"><div class="limit-heading"><span>${label}</span><strong>${percentage(value)}<span class="remaining-word"> left</span></strong></div><div class="track" role="meter" aria-label="${label} remaining" ${value == null ? 'aria-valuetext="Unavailable"' : `aria-valuemin="0" aria-valuemax="100" aria-valuenow="${width}"`}><span style="width:${width}%"></span></div><div class="reset">${window ? esc(resetLabel(window.resetsAt)) : 'Limit unavailable'}</div></div>`;
+  return `<div class="limit ${value != null && value <= 20 ? 'low' : ''}">${usageRing(label, value)}<div class="limit-copy"><div class="limit-heading"><span>${label}</span><strong>${percentage(value)}<span class="remaining-word"> left</span></strong></div><div class="reset">${window ? esc(resetLabel(window.resetsAt)) : 'Limit unavailable'}</div></div></div>`;
 }
 
 function alertsBanner() {
@@ -291,7 +319,9 @@ function addPanel() {
   return `<section class="add-panel"><div class="section-heading"><h2>Connect an account</h2>${iconButton('cancel-add', 'x', 'Cancel')}</div><form data-form="connect"><label class="field-label" for="account-label">Account name</label><input id="account-label" name="label" placeholder="Work or Personal" maxlength="48" autocomplete="off" required/><p>Sign in with ChatGPT in your browser. You only need to do this once per account.</p><button class="primary-button" type="submit">Continue in browser <span aria-hidden="true">↗</span></button></form></section>`;
 }
 
-function render() {
+function render(autoSync = true) {
+  // Background snapshots must not replace the shell mid-animation.
+  if (transition && autoSync) return;
   if (dragging || colorPickerOpen) return;
   applyAppTheme(snapshot.settings.appTheme ?? defaultAppTheme);
   const focused = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
@@ -330,9 +360,9 @@ function render() {
         : useAntigravity
           ? `${smallReading('5h', notchGroup?.fiveHour ?? null, 'antigravity')}${smallReading('Week', notchGroup?.weekly ?? null, 'antigravity')}`
           : `${smallReading('5h', active?.fiveHour ?? null, 'codex')}${smallReading('Week', active?.weekly ?? null, 'codex')}`;
-  const notchTooltip = 'Click to expand · drag to move · Alt+Shift+U';
+  const notchTooltip = 'Click to expand · drag to an edge to dock · drag away to float · Alt+Shift+U';
   const notchProvider = useClaude ? 'claude' : useAntigravity ? 'antigravity' : 'codex';
-  root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${transition ? 'transitioning' : ''}`;
+  root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${opening ? 'opening' : ''} ${preparingOpen ? 'preparing-open' : ''}`;
   root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} class="compact" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${esc(subtitle)}</span></span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${alertsBanner()}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : ''}${switchPanel()}${visible('codex') ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   if (scroll) scroll.scrollTop = scrollTop;
@@ -347,7 +377,7 @@ function render() {
     const target = focusTarget.id ? document.getElementById(focusTarget.id) : Array.from(root.querySelectorAll<HTMLElement>('[data-action]')).find(element => element.dataset.action === focusTarget.action && element.dataset.id === focusTarget.accountId);
     target?.focus({ preventScroll: true });
   }
-  if (expanded) void syncHeight();
+  if (expanded && autoSync) void syncHeight();
 }
 
 async function syncHeight() {
@@ -359,11 +389,9 @@ async function syncHeight() {
   if (Math.abs(desiredHeight - height) < 2) return;
   desiredHeight = height;
   try {
-    const layout = await call<{ upward: boolean; height: number }>('set_expanded', { expanded: true, height });
+    const layout = await call<NotchLayout>('set_expanded', { expanded: true, height });
     if (!expanded) return;
-    upward = layout.upward;
-    root.classList.toggle('upward', upward);
-    if (preview) root.style.height = `${layout.height}px`;
+    applyLayout(layout);
   } catch (err) { error = String(err); }
 }
 
@@ -371,14 +399,21 @@ async function toggle(open = !expanded) {
   if (transition || open === expanded) return;
   transition = true;
   if (open) {
-    expanded = true; desiredHeight = 0; render();
-    await new Promise(resolve => setTimeout(resolve, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180));
+    preparingOpen = true;
+    expanded = true; desiredHeight = 0; render(false);
+    await syncHeight();
+    preparingOpen = false;
+    opening = true;
+    root.classList.remove('preparing-open');
+    root.classList.add('opening');
+    await new Promise(resolve => setTimeout(resolve, motionMs(OPEN_MS)));
+    opening = false;
   } else {
+    opening = false;
     root.classList.add('closing');
-    await new Promise(resolve => setTimeout(resolve, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 150));
+    await new Promise(resolve => setTimeout(resolve, motionMs(CLOSE_MS)));
     expanded = false; settingsOpen = false; adding = false; savingAgy = false; managing = null; managingAgy = null; disconnectConfirmation = null; disconnectAgyConfirmation = null; switchPlan = null; desiredHeight = 0;
-    await call('set_expanded', { expanded: false, height: 80 });
-    if (preview) root.style.height = '80px';
+    applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   }
   transition = false;
   render();
@@ -558,6 +593,9 @@ async function start() {
         ],
       },
     };
+    const previewEdge = params.get('edge');
+    if (previewEdge && ['top', 'bottom', 'left', 'right'].includes(previewEdge)) dockEdge = previewEdge as DockEdge;
+    applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
     render();
     if (params.has('expanded')) await toggle(true);
     return;
@@ -568,13 +606,23 @@ async function start() {
     return;
   }
   await listen<Snapshot>('usage-updated', event => { snapshot = event.payload; render(); });
+  await listen<NotchLayout>('notch-layout', event => { applyLayout(event.payload); });
   await listen('hotkey-toggle', () => { if (!transition) void toggle(); });
   await listen('collapse-requested', () => { if (expanded && !transition && !dragging && !colorPickerOpen) void toggle(false); });
   await listen('notch-focused', () => { if (colorPickerOpen) { colorPickerOpen = false; render(); } });
   await listen('notch-drag-finished', () => { dragging = false; render(); });
   await listen('panel-collapsed', () => { expanded = false; transition = false; switchPlan = null; desiredHeight = 0; render(); });
   snapshot = await call<Snapshot>('get_snapshot');
+  applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   render();
 }
 
 void start().catch(err => { error = String(err); expanded = true; render(); });
+
+// Keep countdowns current without replacing focused controls or the drag target.
+setInterval(() => {
+  if (document.hidden) return;
+  for (const label of root.querySelectorAll<HTMLElement>('.reading-reset')) {
+    label.textContent = compactResetLabel(label.dataset.resetAt ? Number(label.dataset.resetAt) : null);
+  }
+}, 30000);

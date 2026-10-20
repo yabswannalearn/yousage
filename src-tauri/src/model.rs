@@ -257,6 +257,44 @@ pub struct WorkArea {
     pub height: i32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DockEdge { #[default] Floating, Top, Bottom, Left, Right }
+
+pub fn snap_edge(point: Point, work: WorkArea, width: i32, height: i32, distance: i32) -> DockEdge {
+    let candidates = [
+        ((point.x - work.x).abs(), DockEdge::Left),
+        ((point.x + width - work.x - work.width).abs(), DockEdge::Right),
+        ((point.y - work.y).abs(), DockEdge::Top),
+        ((point.y + height - work.y - work.height).abs(), DockEdge::Bottom),
+    ];
+    candidates.into_iter().min_by_key(|(gap, _)| *gap)
+        .filter(|(gap, _)| *gap <= distance).map(|(_, edge)| edge).unwrap_or_default()
+}
+
+pub fn snap_center_x(anchor: Point, work: WorkArea, width: i32, distance: i32) -> Option<i32> {
+    let center = work.x + work.width / 2;
+    ((anchor.x + width / 2 - center).abs() <= distance).then(|| work.x + (work.width - width) / 2)
+}
+
+pub fn place_docked_panel(anchor: Point, work: WorkArea, edge: DockEdge, width: i32, compact: i32, wanted: i32) -> PanelPlacement {
+    let height = wanted.min(work.height).max(1);
+    let width = width.min(work.width).max(1);
+    match edge {
+        DockEdge::Floating => place_panel(anchor, work, width, compact, wanted),
+        DockEdge::Top | DockEdge::Bottom => PanelPlacement {
+            x: anchor.x.clamp(work.x, work.x + work.width - width),
+            y: if edge == DockEdge::Top { work.y } else { work.y + work.height - height },
+            height, upward: edge == DockEdge::Bottom,
+        },
+        DockEdge::Left | DockEdge::Right => PanelPlacement {
+            x: if edge == DockEdge::Left { work.x } else { work.x + work.width - width },
+            y: anchor.y.clamp(work.y, work.y + work.height - height),
+            height, upward: false,
+        },
+    }
+}
+
 #[derive(Debug)]
 pub struct PanelPlacement {
     pub x: i32,
@@ -374,6 +412,42 @@ pub fn evaluate_alerts(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn docking_snaps_only_near_an_edge() {
+        use super::*;
+        let work = WorkArea { x: -1920, y: 0, width: 1920, height: 1040 };
+        assert_eq!(snap_edge(Point { x: -1910, y: 300 }, work, 344, 80, 28), DockEdge::Left);
+        assert_eq!(snap_edge(Point { x: -350, y: 300 }, work, 344, 80, 28), DockEdge::Right);
+        assert_eq!(snap_edge(Point { x: -900, y: 10 }, work, 344, 80, 28), DockEdge::Top);
+        assert_eq!(snap_edge(Point { x: -900, y: 950 }, work, 344, 80, 28), DockEdge::Bottom);
+        assert_eq!(snap_edge(Point { x: -900, y: 300 }, work, 344, 80, 28), DockEdge::Floating);
+    }
+
+    #[test]
+    fn horizontal_center_snaps_only_near_the_middle() {
+        use super::*;
+        let work = WorkArea { x: -1920, y: 0, width: 1920, height: 1080 };
+        assert_eq!(snap_center_x(Point { x: -1180, y: 300 }, work, 480, 32), Some(-1200));
+        assert_eq!(snap_center_x(Point { x: -900, y: 300 }, work, 480, 32), None);
+    }
+
+    #[test]
+    fn docked_panels_expand_inward_and_survive_monitor_changes() {
+        use super::*;
+        let work = WorkArea { x: -1920, y: 40, width: 1920, height: 1000 };
+        let anchor = Point { x: -76, y: 900 };
+        let compact = place_docked_panel(anchor, work, DockEdge::Right, 76, 168, 168);
+        let expanded = place_docked_panel(anchor, work, DockEdge::Right, 344, 168, 680);
+        assert_eq!(compact.x + 76, 0);
+        assert_eq!(expanded.x + 344, 0);
+        assert_eq!(expanded.y + expanded.height, 1040);
+        let bottom = place_docked_panel(anchor, work, DockEdge::Bottom, 344, 64, 680);
+        assert!(bottom.upward);
+        assert_eq!(bottom.y + bottom.height, 1040);
+        let changed = place_docked_panel(anchor, WorkArea { x: 0, y: 0, width: 1280, height: 720 }, DockEdge::Left, 344, 168, 680);
+        assert_eq!(changed.x, 0);
+        assert_eq!(changed.y, 40);
+    }
     use super::*;
     use serde_json::json;
 

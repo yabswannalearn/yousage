@@ -53,6 +53,8 @@ The independent `appTheme` setting stores six-digit hex `background` and `accent
 
 The native drag command marks the gesture as active until the mouse is released. Focus-loss collapse and frontend rendering are deferred during the gesture, and the release click stays suppressed until the next intentional pointer press. This prevents a long drag from outlasting a fixed click-suppression timeout and hiding the expanded contents. The native color picker also suspends automatic collapse while open.
 
+Docking is stored as `dockEdge` alongside the existing `anchor`; older settings default to floating. Native drag completion snaps to the nearest work-area edge within 28 logical pixels. Left/right compact windows are 58 × 184 logical pixels; top/bottom are 480 × 40; floating is 440 × 80. Top/bottom detail panels retain their 480-pixel width; side detail panels expand to 440 pixels. The existing window expands inward and publishes `notch-layout` so the frontend matches its native bounds. Monitor fallback and DPI conversion remain in the native placement path. `node tests/docking-ui.mjs` checks all docking layouts against preview data with Vite running, writes screenshots under `artifacts/docking/`, and verifies fit, expansion and Escape. Preview URLs accept `?preview=1&edge=left` (or right/top/bottom).
+
 `npm run test:ui` exercises the real frontend against a mocked Tauri bridge while the Vite server is running; it requires Playwright Chromium (`npx playwright install chromium`). It covers long drags, focus changes, release clicks, color-picker focus, separate accents, preview selection, and hiding/restoring every subscription. These checks do not verify an actual Windows drag gesture or a live Claude account. Run the built Windows app for those checks; live Claude data requires a valid subscription sign-in.
 
 ## Account switching
@@ -73,3 +75,9 @@ cargo test --manifest-path src-tauri/Cargo.toml isolated_codex_keyring_compatibi
 ```
 
 This opt-in Windows test creates a disposable Codex home and a dummy API credential, verifies Codex/YouSage compatibility, then removes the test credential and directory. It does not switch the user's Codex account.
+
+Antigravity's background updater launches `agy --version` in a new console during quota checks. On systems using Windows Terminal as the default terminal, a separate brokered terminal window can appear even when the CLI's own console is hidden. Usage checks set the process-local environment variable `AGY_CLI_DISABLE_AUTO_UPDATE=true` (the literal `true` is required; `1` does not work). Normal interactive CLI sessions and their updates are unchanged. Usage polling launches agy directly with `CREATE_NO_WINDOW`; the previous PowerShell/cmd wrapper and its Job Object were removed. Authentication isolation and refresh behavior are unchanged.
+
+For a Windows integration regression, run `./tests/console-windows.ps1 -AppPath D:/Apps/YouSage/yousage.exe -RestartApp`. This restarts only the named executable, observes its process tree and actual console/Windows Terminal show events for 80 seconds, and fails on internal agy updater children or visible console events correlated with background CLI launches. Keep the desktop otherwise idle so unrelated terminal launches are not mistaken for the app's. The test uses existing sign-ins for normal quota checks; it does not switch accounts. The older synthetic hidden-console inheritance test did not cover Windows Terminal delegation and has been removed.
+
+Circular meters replace compact and detail allowance tracks. Compact readings include reset countdowns, updated in place every 30 seconds without replacing controls; tooltips and detail cards show full reset times. Unknown usage stays a dash with an empty ring.

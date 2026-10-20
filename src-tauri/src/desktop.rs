@@ -1,10 +1,10 @@
-use crate::{model::{place_panel, Point, WorkArea}, state::{self, AppState}};
+use crate::{model::{place_docked_panel, snap_center_x, snap_edge, DockEdge, Point, WorkArea}, state::{self, AppState}};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use tauri::{menu::{Menu, MenuItem}, tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}, AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 
-const WIDTH: f64 = 344.0;
+const WIDTH: f64 = 440.0;
 const COMPACT: f64 = 80.0;
 
 #[derive(Default)]
@@ -26,6 +26,7 @@ pub fn start_notch_drag(app: AppHandle) -> Result<(), String> {
             tokio::time::sleep(std::time::Duration::from_millis(16)).await;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = finish_notch_drag(&app);
         app.state::<AppState>().window.lock().unwrap().dragging = false;
         let _ = app.state::<AppState>().persist();
         let _ = app.emit("notch-drag-finished", ());
@@ -33,15 +34,46 @@ pub fn start_notch_drag(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Layout { pub upward: bool, pub height: f64 }
+pub struct Layout { pub upward: bool, pub height: f64, pub width: f64, pub edge: DockEdge }
+
+fn finish_notch_drag(app: &AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("The notch window is unavailable.")?;
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?.ok_or("Could not find a display.")?;
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let work = WorkArea { x: area.position.x, y: area.position.y, width: area.size.width as i32, height: area.size.height as i32 };
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let edge = snap_edge(Point { x: position.x, y: position.y }, work, size.width as i32, size.height as i32, (28.0 * scale).round() as i32);
+    let state = app.state::<AppState>();
+    let (expanded, upward) = { let placement = state.window.lock().unwrap(); (placement.expanded, placement.upward) };
+    let compact = if edge == DockEdge::Floating { COMPACT } else { 40.0 };
+    let mut anchor = Point {
+        x: if edge == DockEdge::Right { position.x + size.width as i32 - (58.0 * scale).round() as i32 } else { position.x },
+        y: if edge == DockEdge::Bottom || (edge == DockEdge::Floating && expanded && upward) {
+            position.y + size.height as i32 - (compact * scale).round() as i32
+        } else { position.y },
+    };
+    if !matches!(edge, DockEdge::Left | DockEdge::Right) {
+        let target_width = if matches!(edge, DockEdge::Top | DockEdge::Bottom) { (480.0 * scale).round() as i32 } else { size.width as i32 };
+        // Detect proximity using the width the person actually dragged. Docking
+        // can change that width, so center the resulting notch separately.
+        if snap_center_x(Point { x: position.x, y: position.y }, work, size.width as i32, (32.0 * scale).round() as i32).is_some() {
+            anchor.x = work.x + (work.width - target_width) / 2;
+        }
+    }
+    { let mut config = state.config.lock().unwrap(); config.anchor = Some(anchor); config.dock_edge = edge; }
+    set_expanded(app.clone(), expanded, size.height as f64 / scale)?;
+    Ok(())
+}
 
 #[tauri::command]
 pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layout, String> {
     let state = app.state::<AppState>();
     let window = app.get_webview_window("main").ok_or("The notch window is unavailable.")?;
-    let saved_anchor = state.config.lock().unwrap().anchor;
+    let (saved_anchor, edge) = { let config = state.config.lock().unwrap(); (config.anchor, config.dock_edge) };
     let saved_monitor = saved_anchor.and_then(|point| window.available_monitors().ok()?.into_iter().find(|monitor| {
         let area = monitor.work_area();
         point.x >= area.position.x && point.y >= area.position.y && point.x < area.position.x + area.size.width as i32 && point.y < area.position.y + area.size.height as i32
@@ -51,8 +83,11 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
     let area = monitor.work_area();
     let work = WorkArea { x: area.position.x, y: area.position.y, width: area.size.width as i32, height: area.size.height as i32 };
     let anchor = saved_anchor.unwrap_or(Point { x: work.x + work.width - (WIDTH * scale) as i32 - 20, y: work.y + 20 });
-    let desired = if expanded && height.is_finite() { height.clamp(COMPACT, 700.0) } else { COMPACT };
-    let placement = place_panel(anchor, work, (WIDTH * scale).round() as i32, (COMPACT * scale).round() as i32, (desired * scale).round() as i32);
+    let side = matches!(edge, DockEdge::Left | DockEdge::Right);
+    let compact = if side { 184.0 } else if edge == DockEdge::Floating { COMPACT } else { 40.0 };
+    let width = if side && !expanded { 58.0 } else if !side && edge != DockEdge::Floating { 480.0 } else { WIDTH }.min(work.width as f64 / scale);
+    let desired = if expanded && height.is_finite() { height.clamp(compact, 700.0) } else { compact };
+    let placement = place_docked_panel(anchor, work, edge, (width * scale).round() as i32, (compact * scale).round() as i32, (desired * scale).round() as i32);
     state.resizing.store(true, Ordering::SeqCst);
     let generation = state.resize_generation.fetch_add(1, Ordering::SeqCst) + 1;
     {
@@ -60,7 +95,7 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
         placement_state.expanded = expanded;
         placement_state.upward = placement.upward;
     }
-    let result = window.set_size(LogicalSize::new(WIDTH, placement.height as f64 / scale))
+    let result = window.set_size(LogicalSize::new(width, placement.height as f64 / scale))
         .and_then(|_| window.set_position(PhysicalPosition::new(placement.x, placement.y)));
     let reset_app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -69,7 +104,9 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
         if state.resize_generation.load(Ordering::SeqCst) == generation { state.resizing.store(false, Ordering::SeqCst); }
     });
     result.map_err(|_| "Could not resize the notch.")?;
-    Ok(Layout { upward: placement.upward, height: placement.height as f64 / scale })
+    let layout = Layout { upward: placement.upward, height: placement.height as f64 / scale, width, edge };
+    let _ = app.emit("notch-layout", &layout);
+    Ok(layout)
 }
 
 pub fn show(app: &AppHandle) {

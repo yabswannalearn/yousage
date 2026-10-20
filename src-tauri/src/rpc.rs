@@ -174,8 +174,8 @@ pub fn sync_antigravity_auth(source: &Path, destination: &Path) -> Result<(), St
 pub async fn read_antigravity_in(user_root: Option<&Path>) -> Result<(Option<String>, Vec<crate::model::AntigravityGroup>, Option<String>), String> {
     let source = user_root.map(|root| root.join(".gemini")).unwrap_or_else(antigravity_home);
     let usage_home = UsageHome::new(&source)?;
-    let mut command = Command::new(antigravity_executable());
-    command.args(["-p", "/usage", "--output-format", "json"])
+    let mut command = antigravity_usage_command();
+    command
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     // agy starts configured MCP servers even for /usage. Give quota checks an
     // auth-only home and working directory, with no user/project MCP settings.
@@ -184,7 +184,8 @@ pub async fn read_antigravity_in(user_root: Option<&Path>) -> Result<(Option<Str
         .env("GEMINI_CLI_HOME", root.join(".gemini"));
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW: never flash a console.
-    let output = timeout(Duration::from_secs(25), command.output()).await
+    let child = command.spawn().map_err(|_| "Antigravity CLI (agy) could not be started. Install Antigravity or check your PATH.".to_owned())?;
+    let output = timeout(Duration::from_secs(25), child.wait_with_output()).await
         .map_err(|_| "Antigravity took too long to respond. Retry when your connection is available.".to_owned())?
         .map_err(|_| "Antigravity CLI (agy) could not be started. Install Antigravity or check your PATH.".to_owned())?;
     if !output.status.success() {
@@ -200,6 +201,16 @@ pub async fn read_antigravity_in(user_root: Option<&Path>) -> Result<(Option<Str
     let error = groups.is_empty().then(|| "Antigravity did not return model quota groups for this account.".to_owned());
     let email = user_root.and_then(antigravity_email_in).or_else(antigravity_email);
     Ok((email, groups, error))
+}
+
+fn antigravity_usage_command() -> Command {
+    let mut command = Command::new(antigravity_executable());
+    command.args(["-p", "/usage", "--output-format", "json"])
+        // agy's updater starts another CLI with --version in a fresh console.
+        // The CLI requires the literal "true"; "1" does not disable this task.
+        // Scope this to read-only quota checks, never the user's normal sessions.
+        .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    command
 }
 
 struct UsageHome {
