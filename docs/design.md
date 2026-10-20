@@ -21,13 +21,17 @@ Use Segoe UI Variable/Segoe UI for labels and headings, and Cascadia Mono/Consol
 
 ## Layout and signature
 
-The collapsed notch is a compact rounded instrument: the active Codex account, Antigravity model group, or Claude subscription identity at the left, with two labeled allowance readings at the right. The dual Codex/Antigravity preview uses each subscription's own color. The signature is a pair of thin inset allowance tracks that remain recognizable in both the compact notch and expanded cards.
+The collapsed notch is a compact rounded instrument: the active Codex account, Antigravity model group, or Claude subscription identity at the left, with two labeled allowance readings at the right. The dual Codex/Antigravity preview uses each subscription's own color. Circular meters show usage remaining alongside percentages. The compact notch includes reset countdowns (and full reset times on hover); expanded cards show exact reset dates and times. Unknown readings use an empty neutral ring and a dash, never a fabricated percentage.
 
 The detail panel unfolds in place above or below the notch. It organizes visible subscriptions into Codex, Antigravity, and Claude sections showing both allowance windows and their reset times, with active-account and notch-preview markers. The panel also offers refresh, account management, notch preview source selection, settings, and hide actions.
 
 ## Interaction
 
 - Drag the compact header to move the notch; a click without dragging toggles expansion.
+- Release within 28 logical pixels of a monitor's usable edge to dock. Drag away to return to the floating pill. Docking respects the taskbar and remembers the edge and position.
+- Release near the top edge with the notch's visible center within 32 logical pixels of the monitor's horizontal center to snap to top center. Center detection uses the dragged width before converting to the docked width.
+- Expansion reveals the shell over 420 ms with a gentle deceleration; collapse takes 240 ms. Keep details concealed until native resizing completes, and preserve the active animation across background usage updates. Reduced motion skips these transitions.
+- Top and bottom use a wide, thin horizontal notch (480 × 40 logical pixels including transparent clearance) with a flat attached edge. Left and right collapse into a 58 × 184 vertical tab with two circular meters and reset countdowns; the detail panel stays horizontal and expands toward the screen interior. Expanded side panels clamp vertically to the work area without changing the saved compact anchor. Floating windows and side detail panels are 440 pixels wide.
 - Dragging keeps the expanded detail panel and its contents visible for the whole gesture. Native drag focus changes and the release click do not collapse it.
 - Settings offers an individual accent color and visibility switch for Codex, Antigravity, and Claude. Apply accents to their bars, avatars, and preview readings; keep low-allowance warnings amber. Keep Settings available even when every subscription is hidden.
 - Preserve the preferred preview when its subscription is hidden, show a visible source temporarily, and restore the preferred preview when that subscription returns.
