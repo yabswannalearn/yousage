@@ -10,8 +10,9 @@ YouSage sits as a compact, movable notch on your Windows desktop so you can see 
 - **Google Antigravity**: Automatically track remaining quota across **Gemini Models**, **Claude and GPT models**, and **Gemini 4 Argon** via the local Antigravity CLI (`agy`), plus save and switch between multiple Antigravity accounts.
 - **Claude**: Track your Claude subscription's five-hour and weekly allowance through the existing local Claude Code sign-in, with an optional Claude notch preview.
 - **Subscription settings**: Choose a custom accent color for Codex, Antigravity, and Claude, and hide or restore each subscription without disconnecting it. Hidden subscriptions are omitted from the notch, detail panel, tray readings, and alerts. Your chosen preview and colors are remembered.
-- **Notch Preview**: Display your active Codex account, any Antigravity model group, or your Claude subscription. The **Both (`Codex + Antigravity`)** option shows those two sources side-by-side.
-- **Smart Alerts & Switch Suggestions**: Get notified when a 5-hour or weekly window drops below `20%` / `10%` or finishes resetting, and get one-click switch suggestions when your active Codex account runs low.
+- **Notch Preview**: Display your active Codex account, any Antigravity model group, or your Claude subscription. Combine any of the three subscriptions and choose five-hour, weekly, or most-constrained readings. Window labels follow the actual data, including weekly-only quotas.
+- **Alerts & Switch Suggestions**: Choose warning and critical thresholds for each provider, enable low-allowance and reset alerts separately, and use snooze or local quiet hours. Codex and Antigravity account suggestions explain their recommendation and respect work/personal preferences and excluded accounts.
+- **Connection health**: See the age of last successful readings, each provider's next check or retry, and recovery instructions without losing cached-reading timestamps.
 - **Global Hotkey (`Alt+Shift+U`) & Dynamic Tray Icon**: Show or toggle the notch from anywhere using `Alt+Shift+U`, and check live status colors and percentages in the system tray.
 - **Built-in Update Checker**: Check for new GitHub Releases directly from **Settings** and download the latest Setup Wizard in one click.
 - **Zero Token Overhead**: Usage checks read local CLI/app-server endpoints or Claude account metadata without starting model turns or consuming tokens.
@@ -62,6 +63,16 @@ YouSage automatically monitors the active local Antigravity sign-in through the 
 - Click **Show in notch** or **Both in notch** on any Antigravity model group, or use the **Notch preview** selector in **Settings**, to choose whether the compact notch displays Codex, an Antigravity group, or both together.
 
 Settings also control low-allowance/reset alerts, Windows startup, refresh frequency, and checking for updates. Press **`Alt+Shift+U`** at any time to show or toggle the notch.
+
+## Preview, alerts, and account suggestions
+
+Open **Settings** to choose a custom combination of Codex, Antigravity, and Claude. Choose the Antigravity model group and whether each preview shows its five-hour window, weekly window, or the window with the lowest remaining percentage. A missing window falls back to the available window with its correct label. Hidden subscriptions stay hidden without losing the saved combination.
+
+Alert settings provide separate low-allowance and reset switches, per-provider warning/critical percentages, snooze, and quiet hours in the computer's local time. The existing Windows notification switch still controls delivery. Notification state is saved locally to avoid repeating the same low alert after restarting; suppressed alerts do not queue up for later delivery.
+
+Use account management to mark a saved account for work or personal use, or exclude it from suggestions. The recommendation purpose filter narrows suggestions to the selected use. Suggestions compare fresh readings for the same provider and, for Antigravity, the same model group. They account for the remaining capacity and an imminent reset. Every switch still opens the existing review and confirmation before closing sessions.
+
+Connection health shows the last successful check, the next scheduled check or eligible retry, and recovery instructions. Refresh respects provider cooldowns: Claude checks at most every five minutes and waits longer after rate limiting. Cached readings retain their actual age when a check fails.
 
 ## Switch Codex desktop and CLI accounts
 

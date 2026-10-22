@@ -279,7 +279,7 @@ pub async fn read_antigravity() -> Result<crate::model::AntigravityStatus, Strin
         email,
         groups,
         accounts: vec![],
-        updated_at: Some(crate::state::now()),
+        updated_at: if error.is_none() { Some(crate::state::now()) } else { None },
         error,
     })
 }

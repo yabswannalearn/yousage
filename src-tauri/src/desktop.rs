@@ -176,17 +176,17 @@ pub fn update_tray(app: &AppHandle, snapshot: &state::Snapshot) {
     let _ = tray.set_tooltip(Some(&tooltip));
     let low_codex = codex_active.is_some_and(|a| {
         a.error.is_some()
-            || a.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
-            || a.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
+            || a.five_hour.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.codex.warning_percent)
+            || a.weekly.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.codex.warning_percent)
     });
     let low_agy = visible("antigravity") && (snapshot.antigravity.error.is_some()
         || snapshot.antigravity.groups.iter().any(|g| {
-            g.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
-                || g.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0)
+            g.five_hour.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.antigravity.warning_percent)
+                || g.weekly.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.antigravity.warning_percent)
         }));
     let low_claude = visible("claude") && (snapshot.claude.error.is_some()
-        || snapshot.claude.five_hour.as_ref().is_some_and(|w| w.remaining <= 20.0)
-        || snapshot.claude.weekly.as_ref().is_some_and(|w| w.remaining <= 20.0));
+        || snapshot.claude.five_hour.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.claude.warning_percent)
+        || snapshot.claude.weekly.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.claude.warning_percent));
     let _ = tray.set_icon(Some(tray_icon_image(low_codex || low_agy || low_claude)));
 }
 

@@ -31,7 +31,13 @@ Choosing a **Connected account** to use in both the Codex desktop app and Codex 
 A quota group reported by the local Antigravity CLI (`agy`), such as **Gemini Models**, **Claude and GPT models**, or **Gemini 4 Argon**. Each group reports its own **Usage remaining** and **Reset time** across five-hour and weekly **Usage windows**.
 
 **Notch preview**:
-The reading currently displayed in the compact **Notch**—the **Active account** in Codex, a chosen **Antigravity model group**, both together, or the **Claude subscription**. Hiding the preferred source temporarily falls back to another visible subscription, without forgetting the preference.
+The reading currently displayed in the compact **Notch**—the **Active account** in Codex, a chosen **Antigravity model group**, the **Claude subscription**, or a custom combination. Custom previews can show the five-hour window, weekly window, or the most constrained available window (the lowest remaining percentage). A fallback reading keeps its actual window label. Hiding the preferred source temporarily falls back to another visible subscription, without forgetting the preference.
+
+**Connection health**:
+The state of a subscription's usage connection, including the last successful check, next scheduled check or eligible retry, and recovery instructions. A failed refresh keeps cached readings visibly dated; a retry respects provider cooldowns.
+
+**Account recommendation**:
+An explained suggestion to use another connected account for the same provider. Suggestions use fresh, comparable allowance windows, consider reset timing, and honor the person's work/personal purpose and exclusions. The person still reviews and confirms an **Account switch**.
 
 **Usage remaining**:
 The percentage of an allowance still available in a particular **Usage window** for a Codex **Account**, an **Antigravity model group**, or the **Claude subscription**.

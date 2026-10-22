@@ -1,7 +1,7 @@
-use crate::{model::{evaluate_alerts, parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, ClaudeStatus, ProviderColors, AppTheme, Point, UpdateStatus}, rpc::{self, Rpc}};
+use crate::{model::{parse_limits, Account, Alert, AntigravityAccount, AntigravityStatus, ClaudeStatus, ProviderColors, AppTheme, Point, UpdateStatus}, rpc::{self, Rpc}, usage::{self, AlertHistory, Health, HealthStatus, ProviderHealth, UsagePreferences}};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::HashMap, fs, path::PathBuf, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}, time::{SystemTime, UNIX_EPOCH}};
+use std::{fs, path::PathBuf, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Mutex}, time::{SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
@@ -27,6 +27,7 @@ pub struct Config {
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
     pub app_theme: AppTheme,
+    pub usage_preferences: UsagePreferences,
 }
 
 impl Default for Config {
@@ -45,6 +46,7 @@ impl Default for Config {
             provider_colors: ProviderColors::default(),
             hidden_providers: vec![],
             app_theme: AppTheme::default(),
+            usage_preferences: UsagePreferences::default(),
         }
     }
 }
@@ -59,6 +61,7 @@ pub struct Settings {
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
     pub app_theme: AppTheme,
+    pub usage_preferences: UsagePreferences,
 }
 
 #[derive(Clone, Serialize)]
@@ -78,12 +81,13 @@ pub struct Snapshot {
     pub login: Option<Login>,
     pub switching: Option<String>,
     pub settings: Settings,
+    pub health: Health,
 }
 
 pub struct AppState {
     pub config: Mutex<Config>,
     pub snapshot: Mutex<Snapshot>,
-    pub alert_history: Mutex<HashMap<String, f64>>,
+    pub alert_history: Mutex<AlertHistory>,
     pub directory: PathBuf,
     persist_guard: Mutex<()>,
     pub io: tokio::sync::Mutex<()>,
@@ -107,6 +111,7 @@ impl AppState {
         if config.notch_source.is_empty() { config.notch_source = "codex".into(); }
         if !config.app_theme.valid() { config.app_theme = AppTheme::default(); }
         if !config.provider_colors.valid() { config.provider_colors = ProviderColors::default(); }
+        if config.usage_preferences.validate().is_err() { config.usage_preferences = UsagePreferences::default(); }
         let mut cached: Vec<Account> = fs::read(directory.join("usage-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         cached.retain(|a| a.desktop || config.profiles.iter().any(|p| p.id == a.id));
         for account in &mut cached { account.error = Some("Checking latest usage…".into()); }
@@ -115,6 +120,18 @@ impl AppState {
         if !antigravity.groups.is_empty() { antigravity.error = Some("Checking latest usage…".into()); }
         let mut claude: ClaudeStatus = fs::read(directory.join("claude-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         if claude.updated_at.is_some() { claude.error = Some("Checking latest usage…".into()); }
+        let saved_health: Health = fs::read(directory.join("health-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
+        let mut health = Health {
+            codex: ProviderHealth::checking(cached.iter().find(|a| a.desktop).and_then(|a| a.updated_at)),
+            antigravity: ProviderHealth::checking(antigravity.updated_at),
+            claude: ProviderHealth::checking(claude.updated_at),
+        };
+        // A restart must not bypass an upstream rate-limit cooldown.
+        for (current, saved) in [(&mut health.codex, &saved_health.codex), (&mut health.antigravity, &saved_health.antigravity), (&mut health.claude, &saved_health.claude)] {
+            if saved.status == HealthStatus::RateLimited && saved.next_retry_at.is_some_and(|retry| retry > now()) { *current = saved.clone(); }
+        }
+        let claude_next_refresh = health.claude.next_retry_at.unwrap_or_default().max(0) as u64;
+        let alert_history = load_alert_history(&directory);
         let snapshot = Snapshot {
             accounts: cached,
             active_account_id: None,
@@ -134,13 +151,15 @@ impl AppState {
                 provider_colors: config.provider_colors.clone(),
                 hidden_providers: config.hidden_providers.clone(),
                 app_theme: config.app_theme.clone(),
+                usage_preferences: config.usage_preferences.clone(),
             },
+            health,
         };
         Ok(Self {
-            config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(HashMap::new()), directory, persist_guard: Mutex::new(()),
+            config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(alert_history), directory, persist_guard: Mutex::new(()),
             io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), switch_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
             resizing: AtomicBool::new(false), resize_generation: AtomicU64::new(0), window: Mutex::new(crate::desktop::WindowState::default()),
-            claude_next_refresh: AtomicU64::new(0),
+            claude_next_refresh: AtomicU64::new(claude_next_refresh),
             claude_token_fingerprint: Mutex::new(None),
         })
     }
@@ -155,7 +174,11 @@ impl AppState {
         let antigravity = serde_json::to_vec(&snapshot.antigravity).map_err(|_| "Could not save Antigravity usage.")?;
         atomic_write(&self.directory.join("antigravity-cache.json"), &antigravity)?;
         let claude = serde_json::to_vec(&snapshot.claude).map_err(|_| "Could not save Claude usage.")?;
-        atomic_write(&self.directory.join("claude-cache.json"), &claude)
+        atomic_write(&self.directory.join("claude-cache.json"), &claude)?;
+        let health = serde_json::to_vec(&snapshot.health).map_err(|_| "Could not save provider health.")?;
+        atomic_write(&self.directory.join("health-cache.json"), &health)?;
+        let history = serde_json::to_vec(&*self.alert_history.lock().unwrap()).map_err(|_| "Could not save alert state.")?;
+        atomic_write(&self.directory.join("alert-state.json"), &history)
     }
 
     pub fn emit(&self, app: &AppHandle) {
@@ -174,6 +197,10 @@ impl AppState {
         uuid::Uuid::parse_str(id).map_err(|_| "Invalid Antigravity account.")?;
         Ok(self.directory.join("antigravity-accounts").join(id))
     }
+}
+
+fn load_alert_history(directory: &std::path::Path) -> AlertHistory {
+    fs::read(directory.join("alert-state.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
 }
 
 fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
@@ -202,10 +229,9 @@ pub async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -
         Ok(limits) => {
             (result.five_hour, result.weekly) = parse_limits(&limits);
             if result.identity.is_none() { result.identity = limits["accountId"].as_str().map(|id| format!("{}:{id}", result.email.as_deref().unwrap_or("").to_lowercase())); }
-            result.updated_at = Some(now());
             if result.five_hour.is_none() && result.weekly.is_none() {
                 result.error = Some("Codex did not return five-hour or weekly limits for this account.".into());
-            }
+            } else { result.updated_at = Some(now()); }
         }
         Err(error) => result.error = Some(error),
     }
@@ -227,23 +253,26 @@ pub async fn refresh_all(app: AppHandle) {
     let new_alerts = {
         let mut snapshot = state.snapshot.lock().unwrap();
         snapshot.refreshing = false;
-        if snapshot.settings.notifications_enabled {
-            let mut history = state.alert_history.lock().unwrap();
-            let hidden = &snapshot.settings.hidden_providers;
-            let accounts = if hidden.iter().any(|p| p == "codex") { &[][..] } else { &snapshot.accounts[..] };
-            let empty_agy = AntigravityStatus::default();
-            let antigravity = if hidden.iter().any(|p| p == "antigravity") { &empty_agy } else { &snapshot.antigravity };
-            let empty_claude = ClaudeStatus::default();
-            let claude = if hidden.iter().any(|p| p == "claude") { &empty_claude } else { &snapshot.claude };
-            let evaluated = evaluate_alerts(&mut history, accounts, antigravity, claude);
-            for alert in &evaluated {
-                snapshot.alerts.retain(|a| a.id != alert.id);
-                snapshot.alerts.push(alert.clone());
-            }
-            evaluated
-        } else {
-            vec![]
+        let rules = &snapshot.settings.usage_preferences.alert_rules;
+        let mut history = state.alert_history.lock().unwrap();
+        let evaluated = usage::evaluate_alerts(&mut history, &snapshot.accounts, &snapshot.antigravity, &snapshot.claude, rules, now());
+        let delivery_enabled = snapshot.settings.notifications_enabled && !rules.suppressed(now(), usage::local_minutes());
+        let evaluated: Vec<_> = evaluated.into_iter().filter(|alert| {
+            let provider = if alert.id.starts_with("agy:") { "antigravity" } else if alert.id.starts_with("claude:") { "claude" } else { "codex" };
+            delivery_enabled && !snapshot.settings.hidden_providers.iter().any(|hidden| hidden == provider)
+        }).collect();
+        for alert in &evaluated {
+            snapshot.alerts.retain(|a| a.id != alert.id);
+            snapshot.alerts.push(alert.clone());
         }
+        // Bound retained banners; alert deduplication is persisted separately.
+        if snapshot.alerts.len() > 100 { let remove = snapshot.alerts.len() - 100; snapshot.alerts.drain(..remove); }
+        let next_check = now().saturating_add(snapshot.settings.refresh_seconds as i64);
+        if snapshot.health.codex.status != HealthStatus::RateLimited { snapshot.health.codex.next_retry_at = Some(next_check); }
+        if snapshot.health.antigravity.status != HealthStatus::RateLimited { snapshot.health.antigravity.next_retry_at = Some(next_check); }
+        let eligible = state.claude_next_refresh.load(Ordering::SeqCst).min(i64::MAX as u64) as i64;
+        snapshot.health.claude.next_retry_at = Some(next_scheduled_retry(now(), snapshot.settings.refresh_seconds, eligible));
+        evaluated
     };
     for alert in new_alerts {
         // Deliver from the backend even while the webview/notch is hidden.
@@ -258,9 +287,42 @@ pub async fn refresh_all(app: AppHandle) {
     let _ = state.persist();
 }
 
+fn next_scheduled_retry(now: i64, cadence: u64, eligible: i64) -> i64 {
+    let cadence = cadence.clamp(30, 600) as i64;
+    let scans = ((eligible.saturating_sub(now).max(1) + cadence - 1) / cadence).max(1);
+    now.saturating_add(scans.saturating_mul(cadence))
+}
+
 async fn refresh_cli_providers(app: &AppHandle) {
+    // Different providers have separate credential stores. Their independent
+    // checks can run together while the outer I/O guard protects switching.
+    let codex_app = app.clone();
+    let codex = tauri::async_runtime::spawn(async move { refresh_codex(&codex_app).await });
+    refresh_antigravity(app).await;
+    let _ = codex.await;
+}
+
+fn cooling_down(health: &ProviderHealth) -> bool {
+    health.status == HealthStatus::RateLimited && health.next_retry_at.is_some_and(|retry| retry > now())
+}
+
+pub(crate) fn complete_health(health: &mut ProviderHealth, provider: &str, error: Option<&str>, last_success: Option<i64>, cadence: u64) {
+    health.update(provider, error, last_success, Some(now().saturating_add(cadence as i64)));
+    if health.status == HealthStatus::RateLimited {
+        // CLI APIs do not expose a Retry-After value. Use a conservative cooldown.
+        health.next_retry_at = Some(now().saturating_add(900));
+    }
+}
+
+async fn refresh_codex(app: &AppHandle) {
     let state = app.state::<AppState>();
     let config = state.config.lock().unwrap().clone();
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        if cooling_down(&snapshot.health.codex) { return; }
+        snapshot.health.codex = ProviderHealth::checking(snapshot.health.codex.last_success_at);
+    }
+    state.emit(app);
     let mut profiles = vec![("desktop".to_owned(), config.desktop_label.unwrap_or_default(), rpc::desktop_home(), true)];
     for profile in config.profiles {
         if let Ok(home) = state.profile_home(&profile.id) { profiles.push((profile.id, profile.label, home, false)); }
@@ -274,7 +336,7 @@ async fn refresh_cli_providers(app: &AppHandle) {
                 // One refresh owner for the active login avoids competing token rotation.
                 let mut account = active.unwrap(); account.id = id.clone(); account.label = label; account.desktop = false;
                 snapshot.accounts.retain(|a| a.id != id); snapshot.accounts.push(account);
-                drop(snapshot); state.emit(&app); continue
+                drop(snapshot); state.emit(app); continue;
             }
         }
         let result = match Rpc::start(&home, !desktop).await {
@@ -286,9 +348,9 @@ async fn refresh_cli_providers(app: &AppHandle) {
             match result {
                 Ok(Some(mut account)) => {
                     if account.error.is_some() {
-                        if let Some(old) = snapshot.accounts.iter().find(|a| a.id == id && a.email == account.email) {
+                        if let Some(old) = snapshot.accounts.iter().find(|a| a.id == id && same_codex_identity(a, &account)) {
                             account.five_hour = old.five_hour.clone(); account.weekly = old.weekly.clone();
-                            account.updated_at = old.updated_at; account.identity = old.identity.clone();
+                            account.updated_at = old.updated_at;
                         }
                     }
                     snapshot.accounts.retain(|a| a.id != id);
@@ -310,74 +372,141 @@ async fn refresh_cli_providers(app: &AppHandle) {
                 }
             }
         }
-        state.emit(&app);
+        state.emit(app);
     }
-    let agy_profiles = state.config.lock().unwrap().antigravity_profiles.clone();
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        let last_success = codex_last_success(&snapshot.accounts, snapshot.active_account_id.as_deref());
+        let error = snapshot.desktop_error.clone();
+        let inactive_failures = snapshot.accounts.iter().filter(|a| !a.desktop && a.error.is_some()).count();
+        complete_health(&mut snapshot.health.codex, "codex", error.as_deref(), last_success, config.refresh_seconds);
+        if error.is_none() && inactive_failures > 0 {
+            snapshot.health.codex.message = format!("{inactive_failures} connected account(s) need attention. Use Sign in again on their cards.");
+        }
+    }
+    state.emit(app);
+}
+
+fn codex_last_success(accounts: &[Account], active_account_id: Option<&str>) -> Option<i64> {
+    // Startup has no confirmed active ID yet. An unavailable CLI must retain
+    // the cached desktop check time; a confirmed sign-out removes that record.
+    accounts.iter().find(|account| match active_account_id {
+        Some(id) => account.id == id,
+        None => account.desktop,
+    }).and_then(|account| account.updated_at)
+}
+
+fn same_codex_identity(a: &Account, b: &Account) -> bool {
+    match (&a.identity, &b.identity) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => same_email(a.email.as_deref(), b.email.as_deref()),
+        _ => false,
+    }
+}
+
+fn same_email(a: Option<&str>, b: Option<&str>) -> bool {
+    a.zip(b).is_some_and(|(a, b)| !a.is_empty() && a.eq_ignore_ascii_case(b))
+}
+
+fn preserve_antigravity_reading(account: &mut AntigravityAccount, previous: &[AntigravityAccount]) {
+    if account.error.is_none() || !account.groups.is_empty() { return; }
+    if let Some(old) = previous.iter().find(|old| old.id == account.id && same_email(old.email.as_deref(), account.email.as_deref())) {
+        account.groups = old.groups.clone();
+        account.updated_at = old.updated_at;
+    }
+}
+
+async fn refresh_antigravity(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let config = state.config.lock().unwrap().clone();
+    let active_email_before = rpc::antigravity_email();
+    let previous_accounts = {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        let same_account = same_email(active_email_before.as_deref(), snapshot.antigravity.email.as_deref());
+        if cooling_down(&snapshot.health.antigravity) && same_account { return; }
+        let previous = snapshot.antigravity.accounts.clone();
+        if !same_account {
+            snapshot.antigravity = AntigravityStatus { email: active_email_before.clone(),
+                accounts: previous.iter().filter(|a| !a.active).cloned().collect(), ..AntigravityStatus::default() };
+        }
+        snapshot.health.antigravity = ProviderHealth::checking(snapshot.antigravity.updated_at);
+        previous
+    };
+    state.emit(app);
+    let agy_profiles = config.antigravity_profiles;
+    let result = rpc::read_antigravity().await;
+    let active_email_after = rpc::antigravity_email();
     let mut agy_accounts = Vec::new();
-    match rpc::read_antigravity().await {
-        Ok(mut antigravity) => {
-            let mut snapshot = state.snapshot.lock().unwrap();
-            if antigravity.error.is_some() && antigravity.groups.is_empty() && !snapshot.antigravity.groups.is_empty() {
-                antigravity.groups = snapshot.antigravity.groups.clone();
-                antigravity.updated_at = snapshot.antigravity.updated_at;
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        match result {
+            Ok(mut antigravity) => {
+                // Authentication can change while the CLI is running. Reuse old
+                // readings only when both local and cached identities agree.
+                let stable_email = same_email(active_email_before.as_deref(), active_email_after.as_deref());
+                if !stable_email || !same_email(antigravity.email.as_deref(), active_email_after.as_deref()) {
+                    antigravity.groups.clear(); antigravity.updated_at = None;
+                    antigravity.email = active_email_after.clone();
+                    antigravity.error = Some("Antigravity sign-in changed during the check. Refresh to see the current account.".into());
+                } else if antigravity.error.is_some() && antigravity.groups.is_empty()
+                    && same_email(snapshot.antigravity.email.as_deref(), antigravity.email.as_deref()) {
+                    antigravity.groups = snapshot.antigravity.groups.clone();
+                    antigravity.updated_at = snapshot.antigravity.updated_at;
+                }
+                snapshot.antigravity = antigravity;
             }
-            let active_email = antigravity.email.clone();
-            let matched_profile = agy_profiles.iter().find(|p| {
-                state.antigravity_profile_home(&p.id).ok()
-                    .and_then(|home| rpc::antigravity_email_in(&home))
-                    .is_some_and(|e| active_email.as_deref().is_some_and(|act| act.eq_ignore_ascii_case(&e)))
-            });
-            let active_label = matched_profile.map(|p| p.label.clone())
-                .or_else(|| active_email.as_deref().and_then(|s| s.split('@').next()).map(str::to_owned))
-                .unwrap_or_else(|| "Active Antigravity".into());
-            let active_id = matched_profile.map(|p| p.id.clone()).unwrap_or_else(|| "active".into());
-            agy_accounts.push(AntigravityAccount {
-                id: active_id,
-                label: active_label,
-                email: active_email,
-                groups: antigravity.groups.clone(),
-                updated_at: antigravity.updated_at,
-                error: antigravity.error.clone(),
-                active: true,
-            });
-            snapshot.antigravity = antigravity;
+            Err(error) => {
+                let matching = same_email(active_email_before.as_deref(), active_email_after.as_deref())
+                    && same_email(snapshot.antigravity.email.as_deref(), active_email_after.as_deref());
+                if !matching { snapshot.antigravity = AntigravityStatus { email: active_email_after.clone(), ..AntigravityStatus::default() }; }
+                snapshot.antigravity.error = Some(error);
+            }
         }
-        Err(error) => {
-            let mut snapshot = state.snapshot.lock().unwrap();
-            if snapshot.antigravity.email.is_none() { snapshot.antigravity.email = rpc::antigravity_email(); }
-            snapshot.antigravity.error = Some(error);
-        }
+        let active = &snapshot.antigravity;
+        let matched_profile = agy_profiles.iter().find(|p| state.antigravity_profile_home(&p.id).ok()
+            .and_then(|home| rpc::antigravity_email_in(&home))
+            .is_some_and(|email| same_email(Some(&email), active.email.as_deref())));
+        let active_label = matched_profile.map(|p| p.label.clone())
+            .or_else(|| active.email.as_deref().and_then(|s| s.split('@').next()).map(str::to_owned))
+            .unwrap_or_else(|| "Active Antigravity".into());
+        agy_accounts.push(AntigravityAccount { id: matched_profile.map(|p| p.id.clone()).unwrap_or_else(|| "active".into()),
+            label: active_label, email: active.email.clone(), groups: active.groups.clone(),
+            updated_at: active.updated_at, error: active.error.clone(), active: true });
     }
+    state.emit(app);
     let active_agy_email = state.snapshot.lock().unwrap().antigravity.email.clone();
     for profile in agy_profiles {
         let Ok(home) = state.antigravity_profile_home(&profile.id) else { continue; };
         let saved_email = rpc::antigravity_email_in(&home);
-        if saved_email.as_deref().is_some_and(|e| active_agy_email.as_deref().is_some_and(|act| act.eq_ignore_ascii_case(e))) {
-            continue;
-        }
-        let acc = match rpc::read_antigravity_in(Some(&home)).await {
-            Ok((email, groups, error)) => AntigravityAccount {
-                id: profile.id.clone(),
-                label: profile.label.clone(),
-                email: email.or(saved_email),
-                groups,
-                updated_at: Some(now()),
-                error,
-                active: false,
-            },
-            Err(error) => AntigravityAccount {
-                id: profile.id.clone(),
-                label: profile.label.clone(),
-                email: saved_email,
-                groups: vec![],
-                updated_at: None,
-                error: Some(error),
-                active: false,
-            },
+        if same_email(saved_email.as_deref(), active_agy_email.as_deref()) { continue; }
+        let result = rpc::read_antigravity_in(Some(&home)).await;
+        let final_email = rpc::antigravity_email_in(&home);
+        let mut account = match result {
+            Ok((email, groups, error)) => {
+                let matching = same_email(saved_email.as_deref(), final_email.as_deref()) && same_email(email.as_deref(), final_email.as_deref());
+                AntigravityAccount { id: profile.id.clone(), label: profile.label.clone(), email: final_email,
+                    updated_at: if matching && error.is_none() && !groups.is_empty() { Some(now()) } else { None },
+                    groups: if matching { groups } else { vec![] },
+                    error: if matching { error } else { Some("The saved Antigravity sign-in changed. Refresh to check it again.".into()) }, active: false }
+            }
+            Err(error) => AntigravityAccount { id: profile.id.clone(), label: profile.label.clone(),
+                email: final_email, groups: vec![], updated_at: None, error: Some(error), active: false },
         };
-        agy_accounts.push(acc);
+        preserve_antigravity_reading(&mut account, &previous_accounts);
+        agy_accounts.push(account);
     }
-    state.snapshot.lock().unwrap().antigravity.accounts = agy_accounts;
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        snapshot.antigravity.accounts = agy_accounts;
+        let last_success = snapshot.antigravity.updated_at;
+        let error = snapshot.antigravity.error.clone();
+        let inactive_failures = snapshot.antigravity.accounts.iter().filter(|a| !a.active && a.error.is_some()).count();
+        complete_health(&mut snapshot.health.antigravity, "antigravity", error.as_deref(), last_success, config.refresh_seconds);
+        if error.is_none() && inactive_failures > 0 {
+            snapshot.health.antigravity.message = format!("{inactive_failures} saved account(s) need attention. Check their cards and save the sign-in again if needed.");
+        }
+    }
+    state.emit(app);
 }
 
 #[tauri::command]
@@ -681,11 +810,36 @@ fn valid_slug(id: &str) -> bool {
 
 fn valid_notch_source(value: &str) -> bool {
     value == "codex"
+        || value == "custom"
         || value == "claude"
         || value == "antigravity"
         || value == "both"
         || value.strip_prefix("antigravity:").is_some_and(valid_slug)
         || value.strip_prefix("both:").is_some_and(valid_slug)
+        || value.strip_prefix("custom:").is_some_and(valid_slug)
+}
+
+fn save_usage_preferences(directory: &std::path::Path, config: &mut Config, preferences: UsagePreferences) -> Result<(), String> {
+    preferences.validate()?;
+    let mut next = config.clone();
+    next.usage_preferences = preferences;
+    let bytes = serde_json::to_vec_pretty(&next).map_err(|_| "Could not save usage preferences.")?;
+    atomic_write(&directory.join("settings.json"), &bytes)?;
+    *config = next;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_usage_preferences(app: AppHandle, preferences: UsagePreferences) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    {
+        let _guard = state.persist_guard.lock().unwrap();
+        let mut config = state.config.lock().unwrap();
+        save_usage_preferences(&state.directory, &mut config, preferences.clone())?;
+        state.snapshot.lock().unwrap().settings.usage_preferences = preferences;
+    }
+    state.emit(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -722,15 +876,17 @@ pub fn update_settings(
         if let Some(theme) = app_theme { config.app_theme = theme; }
         (config.notch_source.clone(), config.notifications_enabled, config.provider_colors.clone(), config.hidden_providers.clone(), config.app_theme.clone())
     };
-    state.snapshot.lock().unwrap().settings = Settings {
-        start_with_windows,
-        refresh_seconds,
-        notch_source: resolved_source,
-        notifications_enabled: resolved_notifications,
-        provider_colors: resolved_colors,
-        hidden_providers: resolved_hidden,
-        app_theme: resolved_theme,
-    };
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        let settings = &mut snapshot.settings;
+        settings.start_with_windows = start_with_windows;
+        settings.refresh_seconds = refresh_seconds;
+        settings.notch_source = resolved_source;
+        settings.notifications_enabled = resolved_notifications;
+        settings.provider_colors = resolved_colors;
+        settings.hidden_providers = resolved_hidden;
+        settings.app_theme = resolved_theme;
+    }
     state.persist()?;
     state.emit(&app);
     Ok(())
@@ -748,6 +904,7 @@ mod tests {
         assert!(config.hidden_providers.is_empty());
         assert_eq!(config.provider_colors, ProviderColors::default());
         assert_eq!(config.app_theme, AppTheme::default());
+        assert_eq!(config.usage_preferences, UsagePreferences::default());
     }
 
     #[test]
@@ -763,8 +920,72 @@ mod tests {
         assert!(restored.app_theme.valid());
         assert!(!AppTheme { background: "#fff;display:none".into(), ..AppTheme::default() }.valid());
         assert!(valid_notch_source("claude"));
+        assert!(valid_notch_source("custom"));
+        assert!(valid_notch_source("custom:gemini-4-argon"));
+        assert!(!valid_notch_source("custom:../credentials"));
         assert!(!valid_notch_source("none"));
         config.provider_colors.claude = "#fff;display:none".into();
         assert!(!config.provider_colors.valid());
+    }
+
+    #[test]
+    fn preferences_and_alert_dedup_survive_disk_roundtrip_without_partial_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        let mut preferences = UsagePreferences::default();
+        preferences.notch_providers = vec!["claude".into(), "codex".into()];
+        preferences.alert_rules.snoozed_until = Some(1800000000);
+        save_usage_preferences(directory.path(), &mut config, preferences.clone()).unwrap();
+        let saved: Config = serde_json::from_slice(&fs::read(directory.path().join("settings.json")).unwrap()).unwrap();
+        assert_eq!(saved.usage_preferences, preferences);
+        assert_eq!(config.usage_preferences, preferences);
+        let mut invalid = preferences.clone(); invalid.alert_rules.codex.critical_percent = 99.0;
+        assert!(save_usage_preferences(directory.path(), &mut config, invalid).is_err());
+        assert_eq!(config.usage_preferences, preferences);
+        assert_eq!(serde_json::from_slice::<Config>(&fs::read(directory.path().join("settings.json")).unwrap()).unwrap().usage_preferences, preferences);
+        let missing_directory = directory.path().join("absent");
+        assert!(save_usage_preferences(&missing_directory, &mut config, UsagePreferences::default()).is_err());
+        assert_eq!(config.usage_preferences, preferences);
+        let mut history = AlertHistory::new();
+        history.insert("codex:account:5h".into(), usage::AlertObservation { remaining: 7.0, resets_at: Some(100) });
+        atomic_write(&directory.path().join("alert-state.json"), &serde_json::to_vec(&history).unwrap()).unwrap();
+        assert_eq!(load_alert_history(directory.path()), history);
+    }
+
+    #[test]
+    fn antigravity_failure_preserves_only_the_same_known_account_and_timestamp() {
+        let previous = vec![AntigravityAccount { id: "saved".into(), email: Some("work@example.com".into()),
+            groups: vec![crate::model::AntigravityGroup { id: "gemini".into(), ..Default::default() }],
+            updated_at: Some(100), ..Default::default() }];
+        let mut failure = AntigravityAccount { id: "saved".into(), email: Some("WORK@example.com".into()),
+            error: Some("Connection unavailable".into()), ..Default::default() };
+        preserve_antigravity_reading(&mut failure, &previous);
+        assert_eq!(failure.groups.len(), 1); assert_eq!(failure.updated_at, Some(100));
+        failure.groups.clear(); failure.updated_at = None; failure.email = Some("personal@example.com".into());
+        preserve_antigravity_reading(&mut failure, &previous);
+        assert!(failure.groups.is_empty()); assert_eq!(failure.updated_at, None);
+        failure.email = None; preserve_antigravity_reading(&mut failure, &previous);
+        assert!(failure.groups.is_empty());
+    }
+
+    #[test]
+    fn retry_times_follow_the_configured_scan_schedule_and_provider_cooldown() {
+        assert_eq!(next_scheduled_retry(100, 60, 400), 400);
+        assert_eq!(next_scheduled_retry(100, 600, 400), 700);
+        assert_eq!(next_scheduled_retry(100, 60, 401), 460);
+        assert_eq!(next_scheduled_retry(100, 60, 99), 160);
+    }
+
+    #[test]
+    fn codex_health_retains_only_the_desktop_success_time_before_startup_identity_check() {
+        let mut accounts = vec![
+            Account { id: "saved".into(), updated_at: Some(200), ..Account::default() },
+            Account { id: "desktop".into(), desktop: true, updated_at: Some(100), error: Some("CLI unavailable".into()), ..Account::default() },
+        ];
+        assert_eq!(codex_last_success(&accounts, None), Some(100));
+        assert_eq!(codex_last_success(&accounts, Some("desktop")), Some(100));
+        accounts.retain(|account| !account.desktop);
+        assert_eq!(codex_last_success(&accounts, None), None);
+        assert_eq!(codex_last_success(&accounts, Some("desktop")), None);
     }
 }

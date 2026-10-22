@@ -1,4 +1,4 @@
-use crate::{model::{parse_rfc3339, ClaudeStatus, UsageWindow}, state::{now, AppState}};
+use crate::{model::{parse_rfc3339, ClaudeStatus, UsageWindow}, state::{now, AppState}, usage::{HealthStatus, ProviderHealth}};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, process::Stdio, sync::atomic::Ordering, time::Duration};
@@ -97,18 +97,46 @@ pub async fn refresh(app: &AppHandle) {
         Ok(sign_in) => sign_in,
         Err(error) => {
             // Never present another or expired sign-in's cached allowance as live.
-            state.snapshot.lock().unwrap().claude = ClaudeStatus { error: Some(error), ..ClaudeStatus::default() };
+            {
+                let mut snapshot = state.snapshot.lock().unwrap();
+                snapshot.claude = ClaudeStatus { error: Some(error.clone()), ..ClaudeStatus::default() };
+                let retry = now().saturating_add(snapshot.settings.refresh_seconds as i64);
+                snapshot.health.claude.update("claude", Some(&error), None, Some(retry));
+            }
             *state.claude_token_fingerprint.lock().unwrap() = None;
             state.emit(app);
             return;
         }
     };
     let fingerprint: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-    let changed_token = state.claude_token_fingerprint.lock().unwrap().as_ref() != Some(&fingerprint);
-    let changed_account = state.snapshot.lock().unwrap().claude.email != email || (email.is_none() && changed_token);
-    if !changed_token && !changed_account && (now() as u64) < state.claude_next_refresh.load(Ordering::SeqCst) { return; }
+    let previous_fingerprint = *state.claude_token_fingerprint.lock().unwrap();
+    let changed_token = previous_fingerprint.as_ref() != Some(&fingerprint);
+    let cached_email = state.snapshot.lock().unwrap().claude.email.clone();
+    let changed_account = cached_email != email || (email.is_none() && changed_token);
+    let known_auth_change = cached_email.as_ref().zip(email.as_ref()).is_some_and(|(old, current)| !old.eq_ignore_ascii_case(current));
+    if !known_auth_change && (now() as u64) < state.claude_next_refresh.load(Ordering::SeqCst) {
+        if changed_account {
+            let mut snapshot = state.snapshot.lock().unwrap();
+            snapshot.claude = ClaudeStatus { email, plan, error: Some("Claude usage is waiting for its retry cooldown.".into()), ..ClaudeStatus::default() };
+            snapshot.health.claude.last_success_at = None;
+        }
+        // Remember the current token so an unchanged, unidentified sign-in does
+        // not look like a different account on every background scan.
+        *state.claude_token_fingerprint.lock().unwrap() = Some(fingerprint);
+        state.emit(app);
+        return;
+    }
     *state.claude_token_fingerprint.lock().unwrap() = Some(fingerprint);
-    let result = fetch_usage(&token).await.and_then(|value| parse_usage(&value).map_err(|error| (error, REFRESH_SECONDS)));
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        if changed_account { snapshot.claude = ClaudeStatus::default(); }
+        snapshot.health.claude = ProviderHealth::checking(snapshot.claude.updated_at);
+    }
+    state.emit(app);
+    let result = fetch_usage(&token).await.and_then(|value| parse_usage(&value).map_err(|error| (error, REFRESH_SECONDS)))
+        .and_then(|windows| if windows.0.is_none() && windows.1.is_none() {
+            Err(("Claude returned no allowance windows for this sign-in.".into(), REFRESH_SECONDS))
+        } else { Ok(windows) });
     let delay = result.as_ref().err().map(|(_, delay)| *delay).unwrap_or(REFRESH_SECONDS);
     state.claude_next_refresh.store((now() as u64).saturating_add(delay), Ordering::SeqCst);
     {
@@ -123,6 +151,14 @@ pub async fn refresh(app: &AppHandle) {
                 claude.updated_at = Some(now()); claude.error = None;
             }
             Err((error, _)) => { claude.error = Some(error); }
+        }
+        let error = snapshot.claude.error.clone();
+        let last_success = snapshot.claude.updated_at;
+        let next_retry = state.claude_next_refresh.load(Ordering::SeqCst).min(i64::MAX as u64) as i64;
+        snapshot.health.claude.update("claude", error.as_deref(), last_success, Some(next_retry));
+        if snapshot.claude.five_hour.is_none() && snapshot.claude.weekly.is_none() && error.is_none() {
+            snapshot.health.claude.status = HealthStatus::Error;
+            snapshot.health.claude.message = "Claude returned no allowance windows for this sign-in.".into();
         }
     }
     state.emit(app);

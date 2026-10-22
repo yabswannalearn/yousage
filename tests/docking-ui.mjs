@@ -32,6 +32,30 @@ try {
     assert.equal(await header.getAttribute('aria-expanded'), 'false');
     assert.equal(Math.round((await root.boundingBox()).width), Math.round(compact.width));
   }
+  for (const edge of ['floating', 'top', 'bottom', 'left', 'right']) {
+    await page.goto(`http://127.0.0.1:1420/?preview=1&edge=${edge}`);
+    const root = page.locator('#app');
+    const header = page.locator('#notch-toggle');
+    await header.click();
+    await page.waitForTimeout(470);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    for (const provider of ['codex', 'antigravity', 'claude']) await page.locator(`#preview-${provider}`).check();
+    await page.locator('#notch-window').selectOption('weekly');
+    assert.equal(await header.locator('svg[role=meter]').count(), 3, `${edge} custom preview must include all three providers`);
+    assert.deepEqual(await header.locator('.reading-label').allTextContents(), ['C·Week', 'A·Week', 'Cl·Week']);
+    assert.equal(await page.locator('.settings-panel').evaluate(el => el.scrollWidth <= el.clientWidth), true, `${edge} custom settings must fit`);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(320);
+    assert.equal(await header.evaluate(el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth), true, `${edge} three-provider content must fit`);
+    // DOM integer dimensions can differ by one pixel when text uses fractional line heights.
+    const overflow = await header.locator('.small-reading').evaluateAll(elements => elements.some(el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1));
+    assert.equal(overflow, false, `${edge} three-provider readings must stay within their bounds`);
+    await root.screenshot({ path: `artifacts/docking/${edge}-three-providers.png` });
+    await header.click();
+    await page.waitForTimeout(470);
+    assert.equal(await header.locator('svg[role=meter]').count(), 3, `${edge} expansion must preserve provider selection`);
+    assert.equal(await page.locator('.panel-scroll').evaluate(el => el.scrollWidth <= el.clientWidth), true, `${edge} custom details must fit`);
+  }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('http://127.0.0.1:1420/?preview=1&edge=top');
   await page.locator('#notch-toggle').click();
@@ -40,5 +64,5 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('#notch-toggle').getAttribute('aria-expanded') === 'false');
   assert.deepEqual(errors, []);
-  console.log('Docking UI passed: all four edges and floating mode, compact fit, expansion, Escape and restored size.');
+  console.log('Docking UI passed: all edges, single and three-provider fit, truthful weekly labels, expansion, Escape and reduced motion.');
 } finally { await browser.close(); }

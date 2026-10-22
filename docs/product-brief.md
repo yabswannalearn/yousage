@@ -22,6 +22,10 @@
 - Claude subscription usage follows the local Claude Code sign-in and can be selected in the notch independently from Antigravity's Claude model quotas.
 - Settings provides a custom accent color and a show/hide switch for each subscription. Hiding preserves sign-ins and preferences and removes the subscription from the notch, detail panel, tray readings, and alerts. Restore it at any time in Settings, including when all subscriptions are hidden.
 - Settings → Appearance lets the person choose the whole app's background and UI accent, with live preview, readable light/dark text, saved preferences, and a reset to the original app colors. Subscription accent preferences remain independent.
+- Custom notch previews combine any visible subscriptions, including Claude, with five-hour, weekly, or most-constrained window selection. Missing windows fall back with truthful labels.
+- Alert controls include per-provider warning/critical thresholds, separate low/reset switches, snooze, and local quiet hours. Save notification deduplication across restarts and advance it during suppression so old alerts are not delivered afterward.
+- Connection health reports actual last success, next check or eligible retry, and recovery instructions while retaining the age of cached usage.
+- Explain account recommendations for Codex and matching Antigravity model groups using fresh data, capacity and reset timing. Let people set work/personal purposes and exclude accounts from suggestions.
 - Dragging an expanded notch preserves the visible detail panel throughout the gesture and does not treat the release as a toggle click.
 
 ## Account switching

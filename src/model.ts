@@ -55,6 +55,110 @@ export interface ClaudeStatus {
 
 export const defaultProviderColors = { codex: '#b7c8b1', antigravity: '#8ab4d8', claude: '#d99a7c' };
 export type Provider = keyof typeof defaultProviderColors;
+export type AccountPurpose = 'any' | 'work' | 'personal';
+export type PreviewWindowMode = 'fiveHour' | 'weekly' | 'limiting';
+
+export interface UsagePreferences {
+  notchProviders: Provider[];
+  notchWindow: PreviewWindowMode;
+  alertRules: Record<Provider, { warningPercent: number; criticalPercent: number }> & {
+    lowEnabled: boolean;
+    resetEnabled: boolean;
+    quietHoursEnabled: boolean;
+    quietStart: string;
+    quietEnd: string;
+    snoozedUntil: number | null;
+  };
+  accountPreferences: Record<string, { purpose: AccountPurpose; excludeFromSuggestions: boolean }>;
+  recommendationPurpose: AccountPurpose;
+}
+
+export const defaultUsagePreferences: UsagePreferences = {
+  notchProviders: [],
+  notchWindow: 'limiting',
+  alertRules: {
+    codex: { warningPercent: 20, criticalPercent: 10 },
+    antigravity: { warningPercent: 20, criticalPercent: 10 },
+    claude: { warningPercent: 20, criticalPercent: 10 },
+    lowEnabled: true,
+    resetEnabled: true,
+    quietHoursEnabled: false,
+    quietStart: '22:00',
+    quietEnd: '08:00',
+    snoozedUntil: null,
+  },
+  accountPreferences: {},
+  recommendationPurpose: 'any',
+};
+
+const providers: Provider[] = ['codex', 'antigravity', 'claude'];
+const purpose = (value: unknown): AccountPurpose => value === 'work' || value === 'personal' ? value : 'any';
+const record = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+/** Fill older settings with defaults and keep malformed saved values out of the UI. */
+export function usagePreferences(settings?: { usagePreferences?: unknown } | null): UsagePreferences {
+  const saved = record(settings?.usagePreferences);
+  const rules = record(saved.alertRules);
+  const normalized: UsagePreferences = {
+    notchProviders: [],
+    notchWindow: saved.notchWindow === 'fiveHour' || saved.notchWindow === 'weekly' ? saved.notchWindow : 'limiting',
+    alertRules: {
+      ...defaultUsagePreferences.alertRules,
+      codex: { ...defaultUsagePreferences.alertRules.codex },
+      antigravity: { ...defaultUsagePreferences.alertRules.antigravity },
+      claude: { ...defaultUsagePreferences.alertRules.claude },
+    },
+    accountPreferences: {},
+    recommendationPurpose: purpose(saved.recommendationPurpose),
+  };
+  // Preserve the order selected by the person, while removing duplicates.
+  if (Array.isArray(saved.notchProviders)) normalized.notchProviders = [...new Set(saved.notchProviders.filter((provider): provider is Provider => providers.includes(provider as Provider)))];
+  for (const provider of providers) {
+    const savedRule = record(rules[provider]);
+    const warning = savedRule.warningPercent;
+    const critical = savedRule.criticalPercent;
+    const warningPercent = typeof warning === 'number' && Number.isFinite(warning) && warning > 0 && warning <= 100 ? warning : 20;
+    const criticalPercent = typeof critical === 'number' && Number.isFinite(critical) && critical >= 0 && critical < warningPercent ? critical : Math.min(10, warningPercent / 2);
+    normalized.alertRules[provider] = { warningPercent, criticalPercent };
+  }
+  for (const key of ['lowEnabled', 'resetEnabled', 'quietHoursEnabled'] as const) {
+    if (typeof rules[key] === 'boolean') normalized.alertRules[key] = rules[key];
+  }
+  for (const key of ['quietStart', 'quietEnd'] as const) {
+    if (typeof rules[key] === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(rules[key])) normalized.alertRules[key] = rules[key];
+  }
+  if (typeof rules.snoozedUntil === 'number' && Number.isFinite(rules.snoozedUntil) && rules.snoozedUntil > 0) normalized.alertRules.snoozedUntil = rules.snoozedUntil;
+  const accountEntries = Object.entries(record(saved.accountPreferences)).filter(([id]) => /^(codex|antigravity):.+$/.test(id));
+  normalized.accountPreferences = Object.fromEntries(accountEntries.map(([id, value]) => {
+    const preference = record(value);
+    return [id, { purpose: purpose(preference.purpose), excludeFromSuggestions: preference.excludeFromSuggestions === true }];
+  }));
+  return normalized;
+}
+
+export function notchProviders(source: string, preferences: UsagePreferences, hidden: readonly string[] = []): Provider[] {
+  const selected = source === 'custom' || source.startsWith('custom:') ? preferences.notchProviders
+    : isBothNotch(source) ? ['codex', 'antigravity'] as Provider[]
+    : isAntigravityNotch(source) ? ['antigravity'] as Provider[]
+    : source === 'claude' ? ['claude'] as Provider[] : ['codex'] as Provider[];
+  const visible = [...new Set(selected)].filter(provider => providers.includes(provider) && !hidden.includes(provider));
+  return visible.length ? visible : providers.filter(provider => !hidden.includes(provider)).slice(0, 1);
+}
+
+export function previewWindow(fiveHour: UsageWindow | null, weekly: UsageWindow | null, mode: PreviewWindowMode): { label: '5h' | 'Week'; window: UsageWindow | null } {
+  if (mode === 'weekly') return weekly || !fiveHour ? { label: 'Week', window: weekly } : { label: '5h', window: fiveHour };
+  if (!fiveHour && weekly) return { label: 'Week', window: weekly };
+  if (mode === 'limiting' && weekly && (!fiveHour || weekly.remaining < fiveHour.remaining)) return { label: 'Week', window: weekly };
+  return { label: '5h', window: fiveHour };
+}
+
+export interface ProviderHealth {
+  status: 'checking' | 'ready' | 'signInRequired' | 'toolMissing' | 'rateLimited' | 'offline' | 'error';
+  message: string;
+  lastSuccessAt: number | null;
+  nextRetryAt: number | null;
+  recoveryCommand: string | null;
+}
 
 export function providerColor(colors: Partial<Record<Provider, string>> | undefined, provider: Provider): string {
   const color = colors?.[provider];
@@ -63,6 +167,7 @@ export function providerColor(colors: Partial<Record<Provider, string>> | undefi
 
 export function effectiveNotchSource(source: string, hidden: readonly string[] = []): string {
   const visible = (provider: Provider) => !hidden.includes(provider);
+  if ((source === 'custom' || source.startsWith('custom:')) && providers.some(visible)) return source;
   if (isBothNotch(source)) {
     if (visible('codex') && visible('antigravity')) return source;
     if (visible('codex')) return 'codex';
@@ -101,7 +206,8 @@ export interface Snapshot {
   desktopError: string | null;
   login: { status: string; error: string | null } | null;
   switching: string | null;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme };
+  health?: Record<Provider, ProviderHealth>;
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences };
 }
 
 export interface SwitchPlan {
@@ -132,7 +238,7 @@ export function selectedAntigravityGroup(antigravity: AntigravityStatus | null |
     ? notchSource.slice('antigravity:'.length)
     : notchSource?.startsWith('both:')
       ? notchSource.slice('both:'.length)
-      : null;
+      : notchSource?.startsWith('custom:') ? notchSource.slice('custom:'.length) : null;
   if (id) {
     const match = antigravity.groups.find(group => group.id === id);
     if (match) return match;
@@ -161,6 +267,91 @@ export function suggestedCodexSwitch(accounts: Account[], activeAccountId: strin
     }
   }
   return best;
+}
+
+export interface AccountRecommendation {
+  id: string;
+  label: string;
+  reason: string;
+  remaining: number;
+}
+
+type AllowanceReading = { fiveHour: UsageWindow | null; weekly: UsageWindow | null; updatedAt: number | null; error: string | null };
+type Capacity = { remaining: number; label: '5h' | 'Week'; resetsAt: number | null };
+const recommendationFreshnessSeconds = 15 * 60;
+
+function readingCapacity(reading: AllowanceReading, now: number, requireFiveHour: boolean, requireWeekly: boolean): Capacity | null {
+  if (reading.error || reading.updatedAt == null || !Number.isFinite(reading.updatedAt) || reading.updatedAt > now / 1000 + 60 || now / 1000 - reading.updatedAt > recommendationFreshnessSeconds) return null;
+  if ((requireFiveHour && !reading.fiveHour) || (requireWeekly && !reading.weekly)) return null;
+  const windows: Capacity[] = [];
+  for (const [label, window] of [['5h', reading.fiveHour], ['Week', reading.weekly]] as const) {
+    if (!window) continue;
+    if (!Number.isFinite(window.remaining) || window.remaining < 0 || window.remaining > 100 || (window.resetsAt != null && (!Number.isFinite(window.resetsAt) || window.resetsAt <= now / 1000))) return null;
+    windows.push({ label, remaining: window.remaining, resetsAt: window.resetsAt });
+  }
+  return windows.sort((a, b) => a.remaining - b.remaining || (a.resetsAt ?? Infinity) - (b.resetsAt ?? Infinity))[0] ?? null;
+}
+
+function activeBottleneck(reading: AllowanceReading, now: number, warningPercent: number): Capacity | null {
+  const windows = [['5h', reading.fiveHour], ['Week', reading.weekly]] as const;
+  return windows.filter((entry): entry is readonly ['5h' | 'Week', UsageWindow] => entry[1] != null)
+    .filter(([, window]) => window.remaining <= warningPercent && (window.resetsAt == null || window.resetsAt - now / 1000 > recommendationFreshnessSeconds))
+    .map(([label, window]) => ({ label, remaining: window.remaining, resetsAt: window.resetsAt }))
+    .sort((a, b) => a.remaining - b.remaining)[0] ?? null;
+}
+
+function canRecommend(provider: 'codex' | 'antigravity', id: string, preferences: UsagePreferences): boolean {
+  const saved = preferences.accountPreferences[`${provider}:${id}`];
+  return !saved?.excludeFromSuggestions && (preferences.recommendationPurpose === 'any' || !saved || saved.purpose === 'any' || saved.purpose === preferences.recommendationPurpose);
+}
+
+function worthSwitching(active: Capacity, candidate: Capacity, warningPercent: number): boolean {
+  return candidate.remaining > warningPercent && candidate.remaining >= active.remaining + 10;
+}
+
+function recommendationReason(active: Capacity, candidate: Capacity, now: number): string {
+  const reset = active.resetsAt == null ? '' : ` Current ${active.label} allowance resets ${compactResetLabel(active.resetsAt, now)}.`;
+  return `${percentage(candidate.remaining)} in its lowest window (${candidate.label}), compared with ${percentage(active.remaining)} in the current ${active.label} window.${reset}`;
+}
+
+/** Compare fresh allowances within Codex; switching remains an explicit user action. */
+export function codexRecommendation(accounts: Account[], activeAccountId: string | null, preferences: UsagePreferences, now = Date.now()): AccountRecommendation | null {
+  const distinct = uniqueAccounts(accounts, activeAccountId);
+  const active = distinct.find(account => isActiveAccount(account, accounts, activeAccountId));
+  if (!active) return null;
+  const warning = preferences.alertRules.codex.warningPercent;
+  if (!readingCapacity(active, now, true, true)) return null;
+  const current = activeBottleneck(active, now, warning);
+  if (!current) return null;
+  let best: { account: Account; capacity: Capacity } | null = null;
+  for (const account of distinct) {
+    if (account.desktop || isActiveAccount(account, accounts, activeAccountId) || !canRecommend('codex', account.id, preferences)) continue;
+    const capacity = readingCapacity(account, now, true, true);
+    if (!capacity || !worthSwitching(current, capacity, warning)) continue;
+    if (!best || capacity.remaining > best.capacity.remaining || (capacity.remaining === best.capacity.remaining && (capacity.resetsAt ?? Infinity) < (best.capacity.resetsAt ?? Infinity))) best = { account, capacity };
+  }
+  return best ? { id: best.account.id, label: best.account.label, remaining: best.capacity.remaining, reason: recommendationReason(current, best.capacity, now) } : null;
+}
+
+/** Compare the same Antigravity model group across saved accounts. */
+export function antigravityRecommendation(status: AntigravityStatus, selectedGroupId: string | null | undefined, preferences: UsagePreferences, now = Date.now()): AccountRecommendation | null {
+  const group = selectedGroupId ? status.groups.find(group => group.id === selectedGroupId) : status.groups[0];
+  if (!group) return null;
+  const activeReading = { ...group, updatedAt: status.updatedAt, error: status.error };
+  const warning = preferences.alertRules.antigravity.warningPercent;
+  if (!readingCapacity(activeReading, now, Boolean(group.fiveHour), Boolean(group.weekly))) return null;
+  const current = activeBottleneck(activeReading, now, warning);
+  if (!current) return null;
+  let best: { account: AntigravityAccount; capacity: Capacity } | null = null;
+  for (const account of status.accounts ?? []) {
+    if (account.active || (account.email && status.email && account.email.toLowerCase() === status.email.toLowerCase()) || !canRecommend('antigravity', account.id, preferences)) continue;
+    const matching = account.groups.find(candidate => candidate.id === group.id);
+    if (!matching) continue;
+    const capacity = readingCapacity({ ...matching, updatedAt: account.updatedAt, error: account.error }, now, Boolean(group.fiveHour), Boolean(group.weekly));
+    if (!capacity || !worthSwitching(current, capacity, warning)) continue;
+    if (!best || capacity.remaining > best.capacity.remaining || (capacity.remaining === best.capacity.remaining && (capacity.resetsAt ?? Infinity) < (best.capacity.resetsAt ?? Infinity))) best = { account, capacity };
+  }
+  return best ? { id: best.account.id, label: best.account.label, remaining: best.capacity.remaining, reason: `${group.label}: ${recommendationReason(current, best.capacity, now)}` } : null;
 }
 
 export function percentage(value: number | null | undefined): string {
@@ -193,10 +384,10 @@ export function compactResetLabel(seconds: number | null | undefined, now = Date
 }
 
 export function freshness(reading: { updatedAt: number | null; error: string | null }, now = Date.now()): string {
-  if (reading.error) return reading.updatedAt ? 'Last known usage' : 'Usage unavailable';
-  if (!reading.updatedAt) return 'Waiting for usage';
+  if (reading.updatedAt == null || !Number.isFinite(reading.updatedAt)) return reading.error ? 'Usage unavailable' : 'Waiting for usage';
   const age = Math.max(0, Math.floor(now / 1000 - reading.updatedAt));
-  return age < 90 ? 'Updated just now' : `Updated ${Math.floor(age / 60)}m ago`;
+  const ageLabel = age < 90 ? 'just now' : age < 3600 ? `${Math.floor(age / 60)}m ago` : age < 86400 ? `${Math.floor(age / 3600)}h ago` : `${Math.floor(age / 86400)}d ago`;
+  return reading.error ? `Last known usage · ${ageLabel}` : `Updated ${ageLabel}`;
 }
 
 export function uniqueAccounts(accounts: Account[], activeAccountId: string | null): Account[] {

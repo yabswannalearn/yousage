@@ -154,6 +154,10 @@ async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Res
         state.config.lock().unwrap().desktop_label = Some(target.label.clone());
         {
             let mut snapshot = state.snapshot.lock().unwrap();
+            // The previous account's cooldown does not apply to the verified
+            // incoming sign-in. Its own successful check is authoritative.
+            let cadence = snapshot.settings.refresh_seconds;
+            state::complete_health(&mut snapshot.health.codex, "codex", incoming_account.error.as_deref(), incoming_account.updated_at, cadence);
             let mut desktop = incoming_account.clone(); desktop.id = "desktop".into(); desktop.desktop = true;
             snapshot.accounts.retain(|a| a.id != "desktop" && a.id != id);
             snapshot.accounts.push(incoming_account); snapshot.accounts.push(desktop);

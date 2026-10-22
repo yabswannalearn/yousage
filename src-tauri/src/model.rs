@@ -356,58 +356,9 @@ pub fn parse_github_release(value: &Value, current_version: &str) -> UpdateStatu
     }
 }
 
-pub fn evaluate_alerts(
-    previous: &mut std::collections::HashMap<String, f64>,
-    accounts: &[Account],
-    antigravity: &AntigravityStatus,
-    claude: &ClaudeStatus,
-) -> Vec<Alert> {
-    let mut alerts = Vec::new();
-    let mut check = |key: String, owner: &str, window_name: &str, window: Option<&UsageWindow>| {
-        let Some(w) = window else { return; };
-        let pct = w.remaining.round().clamp(0.0, 100.0);
-        let prev = previous.insert(key.clone(), pct);
-        if pct <= 10.0 && prev.is_none_or(|p| p > 10.0) {
-            alerts.push(Alert {
-                id: format!("{key}:critical"),
-                title: format!("{owner} · {window_name} critically low"),
-                message: format!("{owner} has {pct:.0}% remaining in its {window_name} window."),
-                kind: "low".into(),
-            });
-        } else if pct <= 20.0 && prev.is_none_or(|p| p > 20.0) {
-            alerts.push(Alert {
-                id: format!("{key}:low"),
-                title: format!("{owner} · {window_name} low"),
-                message: format!("{owner} has {pct:.0}% remaining in its {window_name} window."),
-                kind: "low".into(),
-            });
-        } else if pct >= 80.0 && prev.is_some_and(|p| p <= 20.0) {
-            alerts.push(Alert {
-                id: format!("{key}:reset"),
-                title: format!("{owner} · {window_name} refilled"),
-                message: format!("{owner} {window_name} window reset ({pct:.0}% remaining)."),
-                kind: "reset".into(),
-            });
-        }
-    };
-    for account in accounts {
-        let key_base = account.identity.as_deref().or(account.email.as_deref()).unwrap_or(&account.id);
-        let owner = format!("Codex ({})", account.label);
-        check(format!("codex:{key_base}:5h"), &owner, "5-hour", account.five_hour.as_ref());
-        check(format!("codex:{key_base}:weekly"), &owner, "weekly", account.weekly.as_ref());
-    }
-    let agy_key = antigravity.email.as_deref().unwrap_or("active");
-    for group in &antigravity.groups {
-        let owner = format!("Antigravity ({})", group.label);
-        check(format!("agy:{agy_key}:{}:5h", group.id), &owner, "5-hour", group.five_hour.as_ref());
-        check(format!("agy:{agy_key}:{}:weekly", group.id), &owner, "weekly", group.weekly.as_ref());
-    }
-    if claude.error.is_none() {
-        let key = claude.email.as_deref().unwrap_or("active");
-        check(format!("claude:{key}:5h"), "Claude", "5-hour", claude.five_hour.as_ref());
-        check(format!("claude:{key}:weekly"), "Claude", "weekly", claude.weekly.as_ref());
-    }
-    alerts
+#[cfg(test)]
+fn evaluate_alerts(previous: &mut crate::usage::AlertHistory, accounts: &[Account], antigravity: &AntigravityStatus, claude: &ClaudeStatus) -> Vec<Alert> {
+    crate::usage::evaluate_alerts(previous, accounts, antigravity, claude, &crate::usage::AlertRules::default(), crate::state::now())
 }
 
 #[cfg(test)]

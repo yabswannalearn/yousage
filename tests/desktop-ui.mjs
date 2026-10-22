@@ -24,7 +24,7 @@ await page.addInitScript(() => {
     dragging: false,
     calls: [],
     snapshot,
-    emit(event, payload = null) { callbacks.get(events.get(event))?.({ event, payload }); },
+    emit(event, payload = null) { callbacks.get(events.get(event))?.({ event, payload: structuredClone(payload) }); },
   };
   window.__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: 'main' } },
@@ -32,7 +32,7 @@ await page.addInitScript(() => {
     async invoke(command, args) {
       window.testBridge.calls.push({ command, args });
       if (command === 'plugin:event|listen') { events.set(args.event, args.handler); return args.handler; }
-      if (command === 'get_snapshot') return snapshot;
+      if (command === 'get_snapshot') return structuredClone(snapshot);
       if (command === 'prepare_switch' || command === 'prepare_antigravity_switch') {
         const antigravity = command === 'prepare_antigravity_switch';
         if (window.testBridge.noSessions) return { id: args.id, label: 'Work', provider: 'codex', desktopRunning: false, cliRunning: false, processNames: [] };
@@ -46,7 +46,13 @@ await page.addInitScript(() => {
       }
       if (command === 'plugin:window|start_dragging' || command === 'start_notch_drag') { window.testBridge.dragging = true; }
       if (command === 'update_settings') {
-        Object.assign(snapshot.settings, args);
+        const { usagePreferences, ...settings } = args;
+        Object.assign(snapshot.settings, settings);
+        window.testBridge.emit('usage-updated', snapshot);
+      }
+      if (command === 'update_usage_preferences') {
+        if (window.testBridge.delayPreferenceSave) await new Promise(resolve => { window.testBridge.releasePreferenceSave = resolve; });
+        snapshot.settings.usagePreferences = args.preferences;
         window.testBridge.emit('usage-updated', snapshot);
       }
     },
@@ -178,6 +184,149 @@ try {
   assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'switch_antigravity_account').length), 0, 'Antigravity must wait for confirmation');
   await page.getByRole('button', { name: 'Close sessions and switch' }).click();
   assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'switch_antigravity_account').args), { id: 'agy-work', restartDesktop: true });
+  await page.evaluate(() => {
+    const snapshot = window.testBridge.snapshot;
+    const now = Date.now() / 1000;
+    snapshot.settings.hiddenProviders = [];
+    snapshot.accounts[0].fiveHour.remaining = 18;
+    snapshot.accounts[1].fiveHour = { remaining: 85, resetsAt: now + 7200 };
+    snapshot.accounts[1].weekly = { remaining: 80, resetsAt: now + 72000 };
+    snapshot.antigravity.groups[0].fiveHour = { remaining: 12, resetsAt: now + 7200 };
+    snapshot.antigravity.accounts[0].groups = [{ ...snapshot.antigravity.groups[0], fiveHour: { remaining: 88, resetsAt: now + 7200 }, weekly: { remaining: 80, resetsAt: now + 72000 } }];
+    snapshot.antigravity.groups.push({ id: 'weekly-only', label: 'Weekly model', description: null, fiveHour: null, weekly: { remaining: 42, resetsAt: now + 72000 } });
+    snapshot.health = {
+      codex: { status: 'signInRequired', message: 'Sign in again to reconnect Codex.', lastSuccessAt: now - 720, nextRetryAt: null, recoveryCommand: 'codex login' },
+      antigravity: { status: 'ready', message: 'Antigravity is connected.', lastSuccessAt: now, nextRetryAt: now + 60, recoveryCommand: null },
+      claude: { status: 'rateLimited', message: 'Claude requested a pause before retrying.', lastSuccessAt: now - 120, nextRetryAt: now + 120, recoveryCommand: null },
+    };
+    window.testBridge.emit('usage-updated', snapshot);
+  });
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('#notch-source').selectOption('both:weekly-only');
+  assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·5h', 'A·Week'], 'weekly-only AGY fallback must identify its actual window');
+  await page.locator('#preview-claude').check();
+  assert.equal(await page.locator('.compact .small-reading').count(), 3, 'all three providers can share the notch');
+  await page.locator('#notch-window').selectOption('weekly');
+  assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·Week', 'A·Week', 'Cl·Week']);
+  await page.locator('#show-claude').uncheck();
+  assert.equal(await page.locator('.compact .small-reading').count(), 2);
+  assert.equal(await page.locator('#preview-claude').isChecked(), true, 'hiding preserves custom provider choices');
+  await page.locator('#show-claude').check();
+  assert.equal(await page.locator('.compact .small-reading').count(), 3);
+  await page.locator('#notch-group').selectOption('gemini');
+  await page.locator('#notch-window').selectOption('limiting');
+  await page.locator('#warning-codex').fill('35');
+  await page.locator('#warning-codex').dispatchEvent('change');
+  await page.locator('#critical-codex').fill('15');
+  await page.locator('#critical-codex').dispatchEvent('change');
+  await page.locator('#alert-lowEnabled').uncheck();
+  await page.locator('#alert-resetEnabled').uncheck();
+  await page.locator('#alert-quietHoursEnabled').check();
+  await page.locator('#quiet-start').fill('21:30');
+  await page.locator('#quiet-end').fill('07:45');
+  await page.getByRole('button', { name: 'Snooze 1 hour', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: 'Resume alerts', exact: true }).count(), 1);
+  await page.getByRole('button', { name: 'Resume alerts', exact: true }).click();
+  const alertPrefs = await page.evaluate(() => window.testBridge.snapshot.settings.usagePreferences.alertRules);
+  assert.deepEqual(alertPrefs.codex, { warningPercent: 35, criticalPercent: 15 });
+  assert.equal(alertPrefs.lowEnabled, false);
+  assert.equal(alertPrefs.resetEnabled, false);
+  assert.equal(alertPrefs.quietStart, '21:30');
+  assert.equal(alertPrefs.quietEnd, '07:45');
+  assert.equal(alertPrefs.snoozedUntil, null);
+  const savesBefore = await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'update_usage_preferences').length);
+  await page.locator('#critical-codex').fill('40');
+  await page.locator('#critical-codex').dispatchEvent('change');
+  assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'update_usage_preferences').length), savesBefore, 'invalid thresholds must not persist');
+  assert.match(await page.locator('.error-banner').innerText(), /critical lower than warning/);
+  await page.getByRole('button', { name: 'Dismiss error', exact: true }).click();
+  await page.locator('#warning-codex').focus();
+  await page.locator('#warning-codex').fill('36');
+  await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
+  assert.equal(await page.locator('#warning-codex').inputValue(), '36', 'background updates must preserve an in-progress threshold edit');
+  assert.equal(await page.locator('#warning-codex').evaluate(el => el === document.activeElement), true);
+  await page.locator('#warning-codex').dispatchEvent('change');
+  assert.match(await page.locator('.health-card').first().innerText(), /Last checked 12m/);
+  assert.equal(await page.locator('[data-action="refresh-health"][data-provider="claude"]').isDisabled(), true, 'Claude retry cooldown must be respected');
+  assert.equal(await page.locator('[data-action="refresh-health"][data-provider="antigravity"]').isEnabled(), true, 'scheduled polling must not prevent manual CLI refresh');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByRole('button', { name: 'Copy sign-in command', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'codex login');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await page.locator('#notch-window').inputValue(), 'limiting');
+  assert.equal(await page.locator('#warning-codex').inputValue(), '36', 'saved alert thresholds must survive reopening Settings');
+  assert.equal(await page.locator('#quiet-start').inputValue(), '21:30');
+  assert.equal(await page.locator('#quiet-end').inputValue(), '07:45');
+  await page.locator('#recommendation-purpose').selectOption('work');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('[data-action="manage"][data-id="work"]').click();
+  await page.locator('[data-account-purpose="codex:work"]').selectOption('work');
+  assert.equal(await page.locator('[data-recommendation="codex"]').count(), 1);
+  await page.locator('[data-account-suggestions="codex:work"]').uncheck();
+  assert.equal(await page.locator('[data-recommendation="codex"]').count(), 0, 'excluded accounts must not be suggested');
+  await page.locator('[data-account-suggestions="codex:work"]').check();
+  await page.locator('[data-recommendation="codex"] button').click();
+  assert.match(await page.getByRole('dialog').innerText(), /Switch Codex account/);
+  await page.getByRole('button', { name: 'Cancel account switch' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('#recommendation-purpose').selectOption('personal');
+  assert.equal(await page.locator('[data-recommendation="codex"]').count(), 0, 'purpose filtering must use saved account preferences');
+  await page.locator('#recommendation-purpose').selectOption('any');
+  assert.equal(await page.locator('[data-recommendation="antigravity"]').count(), 1);
+  await page.locator('[data-recommendation="antigravity"] button').click();
+  assert.match(await page.getByRole('dialog').innerText(), /Switch Antigravity account/);
+  await page.getByRole('button', { name: 'Cancel account switch' }).click();
+  await page.locator('[data-action="manage-agy"][data-id="agy-work"]').click();
+  await page.locator('[data-account-purpose="antigravity:agy-work"]').selectOption('personal');
+  await page.locator('[data-account-suggestions="antigravity:agy-work"]').uncheck();
+  assert.equal(await page.locator('[data-recommendation="antigravity"]').count(), 0);
+  const latestPreferences = await page.evaluate(() => window.testBridge.snapshot.settings.usagePreferences);
+  assert.deepEqual(latestPreferences.accountPreferences['antigravity:agy-work'], { purpose: 'personal', excludeFromSuggestions: true });
+  await page.locator('#agy-name-agy-work').fill('Unsaved AGY name');
+  await page.locator('[data-account-purpose="antigravity:agy-work"]').selectOption('work');
+  assert.equal(await page.locator('#agy-name-agy-work').inputValue(), 'Unsaved AGY name', 'saving account preferences must preserve an unsaved name');
+  await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
+  assert.equal(await page.locator('#agy-name-agy-work').inputValue(), 'Unsaved AGY name', 'background checks must preserve an unsaved name');
+  await page.evaluate(() => { window.testBridge.delayPreferenceSave = true; });
+  const beforeQueuedSaves = await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'update_usage_preferences').length);
+  await page.locator('#alert-lowEnabled').check();
+  await page.waitForFunction(() => window.testBridge.releasePreferenceSave);
+  await page.locator('#alert-resetEnabled').check();
+  await page.locator('#preview-claude').uncheck();
+  await page.locator('#preview-codex').uncheck();
+  assert.equal(await page.locator('#alert-lowEnabled').isChecked(), true);
+  assert.equal(await page.locator('#alert-resetEnabled').isChecked(), true);
+  assert.equal(await page.locator('.compact .small-reading').count(), 1);
+  assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'update_usage_preferences').length), beforeQueuedSaves + 1, 'preference writes must serialize while native storage is delayed');
+  await page.evaluate(() => { window.testBridge.delayPreferenceSave = false; window.testBridge.releasePreferenceSave(); });
+  await page.waitForFunction(() => {
+    const prefs = window.testBridge.snapshot.settings.usagePreferences;
+    return prefs.alertRules.lowEnabled && prefs.alertRules.resetEnabled && prefs.notchProviders.length === 1 && prefs.notchProviders[0] === 'antigravity';
+  });
+  assert.equal(await page.locator('#preview-claude').isChecked(), false);
+  assert.equal(await page.locator('#preview-codex').isChecked(), false);
+  assert.equal(await page.locator('#alert-lowEnabled').isChecked(), true, 'rapid changes must retain both alert choices');
+  assert.equal(await page.locator('#alert-resetEnabled').isChecked(), true);
+  for (const sourceControl of ['preset', 'provider button']) {
+    await page.evaluate(() => { window.testBridge.delayPreferenceSave = true; window.testBridge.releasePreferenceSave = null; });
+    await page.locator('#notch-window').selectOption(sourceControl === 'preset' ? 'weekly' : 'limiting');
+    await page.waitForFunction(() => window.testBridge.releasePreferenceSave);
+    await page.locator('#alert-resetEnabled').uncheck();
+    if (sourceControl === 'preset') await page.locator('#notch-source').selectOption('claude');
+    else await page.locator('[data-action="set-notch"][data-source="codex"]').click();
+    const source = sourceControl === 'preset' ? 'claude' : 'codex';
+    assert.equal(await page.locator('#notch-source').inputValue(), source, `${sourceControl} must supersede a pending custom preview immediately`);
+    await page.evaluate(() => { window.testBridge.delayPreferenceSave = false; window.testBridge.releasePreferenceSave(); });
+    await page.waitForFunction(source => {
+      const { notchSource, usagePreferences } = window.testBridge.snapshot.settings;
+      return notchSource === source && !usagePreferences.alertRules.resetEnabled;
+    }, source);
+    await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
+    assert.equal(await page.locator('#notch-source').inputValue(), source, `${sourceControl} must persist after older custom preview writes finish`);
+    assert.equal(await page.locator('#alert-resetEnabled').isChecked(), false, 'changing preview source must retain queued alert changes');
+    await page.locator('#alert-resetEnabled').check();
+  }
   assert.deepEqual(failures, []);
-  console.log('Desktop UI passed: drag, focus, themes, subscription visibility, native notification test, Codex/Antigravity switch confirmation and cancellation.');
+  console.log('Desktop UI passed: drag, themes, custom provider/window previews, preference persistence and validation, cooldown health and recovery, Codex/Antigravity filtered suggestions and confirmed switching.');
 } finally { await browser.close(); }
