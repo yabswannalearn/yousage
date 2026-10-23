@@ -39,6 +39,15 @@ The state of a subscription's usage connection, including the last successful ch
 **Account recommendation**:
 An explained suggestion to use another connected account for the same provider. Suggestions use fresh, comparable allowance windows, consider reset timing, and honor the person's work/personal purpose and exclusions. The person still reviews and confirms an **Account switch**.
 
+**Usage history**:
+Local samples of **Usage remaining**, grouped by subscription, account, model group when applicable, and usage window. Samples represent successful observations, not token counts or task costs. History stores hashed identities and generic account aliases rather than names, emails, or credentials.
+
+**Pacing estimate**:
+An approximate rate of allowance use and possible exhaustion time derived from enough recent observations in the same usage window. A reset, long gap, failed check, or stale reading makes the estimate unavailable. It describes account-wide allowance changes, which can include use on other computers.
+
+**Privacy mode**:
+A display setting that replaces account names and emails with generic aliases in YouSage, exported history, and notifications. It preserves sign-ins and explicit switching. Enabling it removes earlier YouSage notifications from Windows Notification Center.
+
 **Usage remaining**:
 The percentage of an allowance still available in a particular **Usage window** for a Codex **Account**, an **Antigravity model group**, or the **Claude subscription**.
 _Avoid_: Token count, usage consumed, spending

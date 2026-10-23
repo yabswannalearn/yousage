@@ -160,6 +160,44 @@ export interface ProviderHealth {
   recoveryCommand: string | null;
 }
 
+export interface HistorySample {
+  at: number;
+  remaining: number;
+  resetsAt: number | null;
+}
+
+export interface PacingEstimate {
+  percentagePointsPerHour: number;
+  estimatedExhaustsAt: number;
+  resetAt: number | null;
+  mayRunOutBeforeReset: boolean;
+  observedMinutes: number;
+}
+
+export interface HistorySeries {
+  id: string;
+  provider: Provider;
+  accountId: string;
+  label: string;
+  groupLabel: string | null;
+  window: 'fiveHour' | 'weekly';
+  samples: HistorySample[];
+  pacing: PacingEstimate | null;
+}
+
+export interface UsageHistory {
+  series: HistorySeries[];
+  retentionDays: number;
+  recordingSince: number | null;
+}
+
+export interface NotificationStatus {
+  availability: 'available' | 'disabledForApp' | 'disabledForUser' | 'disabledByPolicy' | 'unavailable';
+  message: string;
+  lastAttemptAt: number | null;
+  lastError: string | null;
+}
+
 export function providerColor(colors: Partial<Record<Provider, string>> | undefined, provider: Provider): string {
   const color = colors?.[provider];
   return color && /^#[0-9a-f]{6}$/i.test(color) ? color : defaultProviderColors[provider];
@@ -207,7 +245,74 @@ export interface Snapshot {
   login: { status: string; error: string | null } | null;
   switching: string | null;
   health?: Record<Provider, ProviderHealth>;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number };
+}
+
+function privateAccountNames(snapshot: Snapshot): Map<string, string> {
+  const aliases = new Map<string, string>();
+  const identities = new Map<string, string>();
+  let codexNumber = 0;
+  for (const account of uniqueAccounts(snapshot.accounts, snapshot.activeAccountId)) {
+    const alias = `Codex account ${++codexNumber}`;
+    aliases.set(`codex:${account.id}`, alias);
+    if (account.identity) identities.set(account.identity, alias);
+  }
+  for (const account of snapshot.accounts) {
+    const alias = account.identity ? identities.get(account.identity) : undefined;
+    if (!aliases.has(`codex:${account.id}`)) aliases.set(`codex:${account.id}`, alias ?? `Codex account ${++codexNumber}`);
+  }
+  const antigravity = snapshot.antigravity.accounts ?? [];
+  antigravity.forEach((account, index) => aliases.set(`antigravity:${account.id}`, `Antigravity account ${index + 1}`));
+  return aliases;
+}
+
+/** Redact display text only. Authentication and account IDs remain in the original snapshot. */
+export function privacyText(value: string, snapshot: Snapshot): string {
+  if (!snapshot.settings.privacyMode || !value) return value;
+  const aliases = privateAccountNames(snapshot);
+  const replacements = new Map<string, string>();
+  const add = (name: string | null | undefined, alias: string) => {
+    if (!name?.trim()) return;
+    const key = name.toLocaleLowerCase();
+    const existing = replacements.get(key);
+    replacements.set(key, existing && existing !== alias ? 'Account' : alias);
+  };
+  for (const account of snapshot.accounts) {
+    const alias = aliases.get(`codex:${account.id}`) ?? 'Codex account';
+    add(account.label, alias); add(account.email, alias);
+  }
+  for (const account of snapshot.antigravity.accounts ?? []) {
+    const alias = aliases.get(`antigravity:${account.id}`) ?? 'Antigravity account';
+    add(account.label, alias); add(account.email, alias);
+  }
+  add(snapshot.antigravity.email, 'Antigravity account');
+  add(snapshot.claude.email, 'Claude account');
+  const names = [...replacements.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const redacted = names.length ? value.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${names.join('|')})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), (_match, prefix: string, name: string) => prefix + replacements.get(name.toLocaleLowerCase())) : value;
+  return redacted.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, 'Hidden account');
+}
+
+/** A render-only copy; callers must retain the original snapshot for account actions. */
+export function privacySnapshot(snapshot: Snapshot): Snapshot {
+  if (!snapshot.settings.privacyMode) return snapshot;
+  const names = privateAccountNames(snapshot);
+  const text = (value: string | null) => value == null ? null : privacyText(value, snapshot);
+  return {
+    ...snapshot,
+    accounts: snapshot.accounts.map(account => ({ ...account, label: names.get(`codex:${account.id}`) ?? 'Codex account', email: null, error: text(account.error) })),
+    antigravity: {
+      ...snapshot.antigravity, email: null, error: text(snapshot.antigravity.error),
+      groups: snapshot.antigravity.groups.map(group => ({ ...group, description: text(group.description) })),
+      accounts: snapshot.antigravity.accounts?.map(account => ({ ...account, label: names.get(`antigravity:${account.id}`) ?? 'Antigravity account', email: null, error: text(account.error), groups: account.groups.map(group => ({ ...group, description: text(group.description) })) })),
+    },
+    claude: { ...snapshot.claude, email: null, error: text(snapshot.claude.error) },
+    alerts: snapshot.alerts.map(alert => ({ ...alert, title: privacyText(alert.title, snapshot), message: privacyText(alert.message, snapshot) })),
+    health: snapshot.health ? Object.fromEntries(Object.entries(snapshot.health).map(([provider, health]) => [provider, { ...health, message: privacyText(health.message, snapshot) }])) as Snapshot['health'] : undefined,
+    desktopError: text(snapshot.desktopError),
+    login: snapshot.login ? { ...snapshot.login, status: privacyText(snapshot.login.status, snapshot), error: text(snapshot.login.error) } : null,
+    switching: text(snapshot.switching),
+    update: { ...snapshot.update, error: text(snapshot.update.error) },
+  };
 }
 
 export interface SwitchPlan {

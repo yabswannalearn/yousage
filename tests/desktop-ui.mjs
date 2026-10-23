@@ -100,7 +100,11 @@ try {
   await page.getByLabel('App background', { exact: true }).fill('#e9e4ff');
   await page.getByLabel('UI accent', { exact: true }).fill('#8b45ce');
   assert.equal(await page.locator('.shell').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(233, 228, 255)');
-  assert.equal(await page.locator('.brand-mark span').first().evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(139, 69, 206)');
+  assert.equal(await page.locator('#notifications').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(139, 69, 206)');
+  const mark = page.locator('.brand-mark img');
+  assert.equal(await mark.getAttribute('draggable'), 'false');
+  const markSvg = await page.evaluate(async src => (await fetch(src)).text(), await mark.getAttribute('src'));
+  assert.match(markSvg, /fill=['"]#9DD9F3['"]/, 'the supplied donut mark keeps its light blue color independently of app accent');
   assert.equal(await page.locator('.compact .small-reading').first().evaluate(el => getComputedStyle(el).getPropertyValue('--sage').trim()), '#b7c8b1', 'app theme must preserve subscription colors');
   if (process.env.YOUSAGE_UI_SCREENSHOT) await page.screenshot({ path: process.env.YOUSAGE_UI_SCREENSHOT.replace(/\.png$/, '-light.png') });
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

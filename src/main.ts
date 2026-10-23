@@ -1,4 +1,5 @@
 import './style.css';
+import notchMark from './assets/notch-mark.svg';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { defaultAppTheme, themePalette, readableAccent, type AppTheme } from './theme';
@@ -21,6 +22,8 @@ import {
   providerColor,
   defaultProviderColors,
   effectiveNotchSource,
+  privacySnapshot,
+  privacyText,
   type Provider,
   type Account,
   type AntigravityAccount,
@@ -29,6 +32,9 @@ import {
   type SwitchPlan,
   type UsageWindow,
   type UsagePreferences,
+  type UsageHistory,
+  type HistorySeries,
+  type NotificationStatus,
 } from './model';
 
 const native = isTauri();
@@ -89,6 +95,20 @@ let preferenceDraft: UsagePreferences | null = null;
 let notchSourceDraft: string | null = null;
 let preferenceRevision = 0;
 let preferenceSaves: Promise<unknown> = Promise.resolve();
+let historyOpen = false;
+let historyRange: 24 | 168 = 24;
+let history: UsageHistory | null = null;
+let historySeriesId = '';
+let historyLoading = false;
+let historyError = '';
+let historyRequest = 0;
+let historyRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let clearHistoryConfirmation = false;
+let notificationStatus: NotificationStatus | null = null;
+let notificationChecking = false;
+let renderSourceSnapshot: Snapshot | null = null;
+let renderedPrivacy = false;
+const redact = (value: string) => privacyText(value, renderSourceSnapshot ?? snapshot);
 
 const paths: Record<string, string> = {
   chevron: '<path d="m5 8 5 5 5-5"/>',
@@ -99,6 +119,8 @@ const paths: Record<string, string> = {
   x: '<path d="m5 5 10 10M15 5 5 15"/>',
   more: '<circle cx="4" cy="10" r=".6"/><circle cx="10" cy="10" r=".6"/><circle cx="16" cy="10" r=".6"/>',
   swap: '<path d="M3 6h13m-3-3 3 3-3 3M17 14H4m3-3-3 3 3 3"/>',
+  history: '<path d="M3 15h14M4 12l4-4 3 2 5-6"/><path d="M3 3v14"/>',
+  privacy: '<path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z"/><circle cx="10" cy="10" r="2"/><path d="m3 3 14 14"/>',
 };
 const icon = (name: string) => `<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? ''}</svg>`;
 const iconButton = (action: string, name: string, label: string, extra = '') => `<button type="button" class="icon-button" data-action="${action}" aria-label="${label}" title="${label}" ${extra}>${icon(name)}</button>`;
@@ -113,6 +135,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return { edge, width: side && !args?.expanded ? 58 : side || edge === 'floating' ? 440 : 480, upward: edge === 'bottom' || (edge === 'floating' && params.has('up')), height: args?.expanded ? Math.min(Math.max(compact, Number(args?.height ?? 80)), innerHeight - 64) : compact } as T;
   }
   if (command === 'get_snapshot') return snapshot as T;
+  if (command === 'get_usage_history') return previewHistory(Number(args?.rangeHours ?? 24)) as T;
+  if (command === 'get_notification_status') return { availability: 'unavailable', message: 'Windows notifications can be checked in the desktop app. This screen uses preview data.', lastAttemptAt: null, lastError: null } as T;
   if (command === 'prepare_antigravity_switch') {
     const account = snapshot.antigravity.accounts?.find(a => a.id === args?.id)!;
     return { id: account.id, label: account.label, provider: 'antigravity', desktopRunning: false, cliRunning: true, processNames: ['agy.exe', 'pwsh.exe'] } as T;
@@ -137,6 +161,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     snapshot.accounts.forEach(account => { account.updatedAt = now; });
     snapshot.antigravity.updatedAt = now;
     if (snapshot.health) for (const health of Object.values(snapshot.health)) if (health && (!health.nextRetryAt || health.nextRetryAt <= now)) { health.lastSuccessAt = now; health.nextRetryAt = null; health.status = 'ready'; }
+  } else if (command === 'set_privacy_mode') {
+    snapshot.settings.privacyMode = Boolean(args?.enabled);
+  } else if (command === 'update_history_settings') {
+    snapshot.settings.historyRetentionDays = Number(args?.retentionDays);
+  } else if (command === 'clear_usage_history') {
+    previewHistoryCleared = true;
+  } else if (command === 'export_usage_history') {
+    return 'timestamp,provider,account,window,remaining_percent\n2026-10-23T00:00:00Z,codex,Codex account 1,fiveHour,75\n' as T;
   } else if (command === 'update_usage_preferences') {
     snapshot.settings.usagePreferences = args?.preferences as UsagePreferences;
   } else if (command === 'dismiss_alert') {
@@ -257,6 +289,95 @@ function retryLabel(at: number | null | undefined) {
   return seconds > 0 ? `Next retry in ${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}` : 'Ready to retry';
 }
 
+const previewHistoryNow = Math.floor(Date.now() / 1000);
+let previewHistoryCleared = false;
+function previewHistory(rangeHours: number): UsageHistory {
+  const at = previewHistoryNow;
+  const series: HistorySeries[] = previewHistoryCleared ? [] : [
+    { id: 'preview-codex-fiveHour', provider: 'codex', accountId: 'desktop', label: 'Work', groupLabel: null, window: 'fiveHour', samples: Array.from({ length: 13 }, (_, i) => ({ at: at - (12 - i) * 900, remaining: 90 - i * 6, resetsAt: at + 7200 })), pacing: { percentagePointsPerHour: 24, estimatedExhaustsAt: at + 2700, resetAt: at + 7200, mayRunOutBeforeReset: true, observedMinutes: 180 } },
+    { id: 'preview-claude-weekly', provider: 'claude', accountId: 'claude', label: 'Claude subscription', groupLabel: null, window: 'weekly', samples: Array.from({ length: 13 }, (_, i) => ({ at: at - (12 - i) * 3600, remaining: 94 - i, resetsAt: at + 345600 })), pacing: { percentagePointsPerHour: 1, estimatedExhaustsAt: at + 82 * 3600, resetAt: at + 345600, mayRunOutBeforeReset: true, observedMinutes: 720 } },
+  ];
+  return { series: series.map(item => ({ ...item, samples: item.samples.filter(sample => sample.at >= at - rangeHours * 3600) })), retentionDays: snapshot.settings.historyRetentionDays ?? 30, recordingSince: previewHistoryCleared ? null : at - 43200 };
+}
+
+async function loadHistory() {
+  if (!historyOpen) return;
+  const request = ++historyRequest;
+  historyLoading = true; historyError = ''; render();
+  try {
+    const result = await call<UsageHistory>('get_usage_history', { rangeHours: historyRange });
+    if (request !== historyRequest || !historyOpen) return;
+    history = result ?? { series: [], retentionDays: snapshot.settings.historyRetentionDays ?? 30, recordingSince: null };
+    if (!history.series.some(series => series.id === historySeriesId)) historySeriesId = history.series[0]?.id ?? '';
+  } catch (err) {
+    if (request === historyRequest) historyError = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (request === historyRequest) { historyLoading = false; render(); }
+  }
+}
+
+function scheduleHistoryRefresh() {
+  if (!historyOpen) return;
+  clearTimeout(historyRefreshTimer);
+  historyRefreshTimer = setTimeout(() => { if (historyOpen) void loadHistory(); }, 250);
+}
+
+async function checkNotifications() {
+  if (notificationChecking) return;
+  notificationChecking = true; render();
+  try { notificationStatus = await call<NotificationStatus>('get_notification_status') ?? null; }
+  catch (err) { notificationStatus = { availability: 'unavailable', message: 'Windows notification status could not be checked.', lastAttemptAt: null, lastError: err instanceof Error ? err.message : String(err) }; }
+  finally { notificationChecking = false; render(); }
+}
+
+function notificationHealthSettings() {
+  const status = notificationStatus;
+  const blocked = status && status.availability !== 'available';
+  return `<div class="notification-health" role="status"><p class="fine-print ${blocked ? 'attention' : ''}">${esc(redact(status?.message ?? 'Check whether Windows allows notifications for YouSage.'))}</p>${status?.lastError ? `<p class="health-message attention">${esc(redact(status.lastError))}</p>` : ''}<div class="history-actions"><button type="button" class="text-button" data-action="check-notifications" ${notificationChecking ? 'disabled' : ''}>${notificationChecking ? 'Checking Windows…' : 'Check notification status'}</button><button type="button" class="text-button" data-action="open-notification-settings">Open Windows notification settings</button></div></div>`;
+}
+
+const sampleTime = (at: number) => new Date(at * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+function historyChart(series: HistorySeries) {
+  const end = Date.now() / 1000;
+  const start = end - historyRange * 3600;
+  const samples = series.samples.filter(sample => Number.isFinite(sample.at) && Number.isFinite(sample.remaining) && sample.at >= start && sample.at <= end).sort((a, b) => a.at - b.at);
+  if (!samples.length) return '<div class="history-empty"><p>No readings in this range.</p><span>Fresh usage checks are recorded while YouSage is running.</span></div>';
+  const x = (at: number) => 34 + (at - start) / (end - start) * 306;
+  const y = (remaining: number) => 14 + (100 - Math.min(100, Math.max(0, remaining))) * 1.1;
+  const intervals = samples.slice(1).map((sample, i) => sample.at - samples[i].at).filter(gap => gap > 0).sort((a, b) => a - b);
+  const gapLimit = Math.max(900, (intervals[Math.floor(intervals.length / 2)] ?? 60) * 3);
+  const segments: string[] = [];
+  let segment: string[] = [];
+  const resetMarkers: string[] = [];
+  samples.forEach((sample, i) => {
+    const previous = samples[i - 1];
+    const reset = previous && (sample.remaining > previous.remaining + 3 || previous.resetsAt != null && sample.resetsAt != null && Math.abs(previous.resetsAt - sample.resetsAt) > 120);
+    if (previous && (reset || sample.at - previous.at > gapLimit)) { if (segment.length > 1) segments.push(segment.join(' ')); segment = []; }
+    if (reset) resetMarkers.push(`<line class="history-reset" x1="${x(sample.at)}" x2="${x(sample.at)}" y1="14" y2="124"><title>New allowance window observed ${esc(sampleTime(sample.at))}</title></line>`);
+    segment.push(`${x(sample.at).toFixed(2)},${y(sample.remaining).toFixed(2)}`);
+  });
+  if (segment.length > 1) segments.push(segment.join(' '));
+  return `<svg class="history-chart" viewBox="0 0 354 168" role="img" aria-labelledby="history-chart-title history-chart-description"><title id="history-chart-title">${esc(redact(series.label))}, ${series.window === 'fiveHour' ? '5 hour' : 'weekly'} allowance remaining over ${historyRange === 24 ? '24 hours' : '7 days'}</title><desc id="history-chart-description">${samples.length} observed readings. Horizontal position is the actual sample time. Gaps and allowance resets are not connected. Latest reading: ${percentage(samples.at(-1)!.remaining)} remaining, ${esc(sampleTime(samples.at(-1)!.at))}.</desc>${[0, 50, 100].map(value => `<line class="history-grid" x1="34" x2="340" y1="${y(value)}" y2="${y(value)}"/><text class="history-axis" x="26" y="${y(value) + 3}" text-anchor="end">${value}%</text>`).join('')}${resetMarkers.join('')}${segments.map(points => `<polyline class="history-line" points="${points}"/>`).join('')}${samples.map(sample => `<circle class="history-point" cx="${x(sample.at)}" cy="${y(sample.remaining)}" r="2.4"><title>${esc(sampleTime(sample.at))} · ${percentage(sample.remaining)} remaining</title></circle>`).join('')}<text class="history-axis" x="34" y="147">${esc(sampleTime(start))}</text><text class="history-axis" x="340" y="147" text-anchor="end">${esc(sampleTime(end))}</text></svg><p class="fine-print history-chart-caption">Observed allowance remaining · hover a reading for its time. Gaps and resets stay separate.</p>`;
+}
+
+function pacingCopy(series: HistorySeries) {
+  const pacing = series.pacing;
+  if (!pacing) return '<p class="fine-print pacing-empty">Not enough recent, comparable readings to estimate your pace. Keep YouSage running as you use this allowance.</p>';
+  const observed = pacing.observedMinutes < 60 ? `${Math.round(pacing.observedMinutes)} minutes` : `${(pacing.observedMinutes / 60).toFixed(1).replace(/\.0$/, '')} hours`;
+  const rate = pacing.percentagePointsPerHour.toFixed(1).replace(/\.0$/, '');
+  return `<div class="pacing-summary ${pacing.mayRunOutBeforeReset ? 'attention' : ''}"><strong>${pacing.mayRunOutBeforeReset ? 'May run out before reset' : 'Allowance may last until reset'}</strong><p>At the recent pace, this allowance may run out around ${esc(sampleTime(pacing.estimatedExhaustsAt))}.${pacing.resetAt ? ` Reset: ${esc(sampleTime(pacing.resetAt))}.` : ''}</p><span>Approximate · ${rate} percentage points/hour over ${observed}. Your pace can change; this is account-wide usage.</span></div>`;
+}
+
+function historyPanel() {
+  const series = history?.series ?? [];
+  const selected = series.find(item => item.id === historySeriesId);
+  return `<section class="history-panel" aria-label="Usage history"><div class="settings-heading"><div><span class="eyebrow">${preview ? 'PREVIEW HISTORY' : 'LOCAL HISTORY'}</span><h2>History & pace</h2></div><div class="history-ranges" role="group" aria-label="History range"><button type="button" data-action="history-range" data-hours="24" aria-pressed="${historyRange === 24}">24 hours</button><button type="button" data-action="history-range" data-hours="168" aria-pressed="${historyRange === 168}">7 days</button></div></div>${historyError ? `<p class="health-message attention" role="alert">${esc(redact(historyError))}</p>` : ''}${historyLoading ? '<p class="fine-print" role="status">Loading history…</p>' : selected ? `<label class="field-label" for="history-series">Account & allowance</label><select id="history-series">${series.map(item => `<option value="${esc(item.id)}" ${item.id === selected.id ? 'selected' : ''}>${esc(providerNames[item.provider])} · ${esc(redact(item.label))}${item.groupLabel ? ` · ${esc(redact(item.groupLabel))}` : ''} · ${item.window === 'fiveHour' ? '5 hour' : 'Weekly'}</option>`).join('')}</select><div ${accentStyle(selected.provider)}>${historyChart(selected)}${pacingCopy(selected)}</div>` : '<div class="history-empty"><p>Your history starts with fresh usage checks.</p><span>Keep YouSage running to see allowance changes and estimates here. Previous usage cannot be recovered.</span></div>'}<div class="history-actions"><button type="button" class="text-button" data-action="refresh-history" ${historyLoading ? 'disabled' : ''}>Refresh history</button><button type="button" class="text-button" data-action="export-history" ${historyLoading || !series.length ? 'disabled' : ''}>Export CSV</button><span class="fine-print">${history?.retentionDays ?? snapshot.settings.historyRetentionDays ?? 30} days stored locally</span></div></section>`;
+}
+
+function historySettings() {
+  return `<div class="settings-group"><h3>Local history</h3><label class="setting-row" for="history-retention"><span>Keep readings for</span><select id="history-retention">${[7, 30, 90].map(days => `<option value="${days}" ${(snapshot.settings.historyRetentionDays ?? 30) === days ? 'selected' : ''}>${days} days</option>`).join('')}</select></label><p class="fine-print">Only fresh allowance percentages and reset times are recorded. Reducing retention removes older readings.</p><div class="history-actions"><button type="button" class="text-button danger" data-action="clear-history">${clearHistoryConfirmation ? 'Confirm clear history' : 'Clear history'}</button>${clearHistoryConfirmation ? '<button type="button" class="text-button" data-action="cancel-clear-history">Cancel</button><span class="fine-print">Delete all recorded readings from this computer?</span>' : ''}</div></div>`;
+}
+
 function connectionHealthSettings() {
   const statusNames = { checking: 'Checking', ready: 'Connected', signInRequired: 'Sign in required', toolMissing: 'Tool missing', rateLimited: 'Rate limited', offline: 'Offline', error: 'Needs attention' };
   return `<div class="settings-group"><h3>Connection health</h3>${(Object.keys(providerNames) as Provider[]).filter(visible).map(provider => {
@@ -336,7 +457,7 @@ function accountCard(account: Account) {
   const initial = esc((account.label || account.email || 'C').charAt(0).toUpperCase());
   const id = esc(account.id);
   const notchAction = active && !inNotch ? `<button type="button" class="text-button notch-pill" data-action="set-notch" data-source="codex">Show in notch</button>` : '';
-  const controls = managing === account.id ? `<form class="manage-form" data-form="rename" data-id="${id}"><label class="field-label" for="name-${id}">Account name</label><div class="inline-input"><input id="name-${id}" name="label" value="${esc(account.label)}" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button></div>${account.desktop ? '<p class="fine-print">Connect this account to save its preferences.</p>' : accountPreferenceControls(account.id)}<div class="manage-actions">${account.desktop ? '<span class="fine-print">Sign-in is managed in Codex.</span>' : `<button type="button" class="text-button" data-action="reconnect" data-id="${id}">Sign in again</button><button type="button" class="text-button danger" data-action="disconnect" data-id="${id}">${disconnectConfirmation === account.id ? 'Confirm disconnect' : 'Disconnect'}</button>`}</div></form>` : '';
+  const controls = managing === account.id ? `<form class="manage-form" data-form="rename" data-id="${id}"><label class="field-label" for="name-${id}">Account name</label><div class="inline-input"><input id="name-${id}" name="label" value="${esc(account.label)}" maxlength="48" required autocomplete="off" ${snapshot.settings.privacyMode ? 'disabled' : ''}/><button class="subtle-button" type="submit" ${snapshot.settings.privacyMode ? 'disabled' : ''}>Save</button></div>${account.desktop ? '<p class="fine-print">Connect this account to save its preferences.</p>' : accountPreferenceControls(account.id)}<div class="manage-actions">${account.desktop ? '<span class="fine-print">Sign-in is managed in Codex.</span>' : `<button type="button" class="text-button" data-action="reconnect" data-id="${id}">Sign in again</button><button type="button" class="text-button danger" data-action="disconnect" data-id="${id}">${disconnectConfirmation === account.id ? 'Confirm disconnect' : 'Disconnect'}</button>`}</div></form>` : '';
   const switchButton = !active && !account.desktop ? `<button class="switch-account-button" data-action="prepare-switch" data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('swap')}<span>${preparingSwitch === account.id ? 'Checking Codex…' : 'Switch to this account'}</span><span aria-hidden="true">→</span></button>` : '';
   return `<article ${accentStyle('codex')} class="account-card ${active ? 'active' : ''}"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(account.label)}${active ? `<span class="active-badge">${inNotch ? 'Active · In notch' : 'Active'}</span>` : ''}${notchAction}</div><div class="account-email" title="${esc(account.email ?? '')}">${esc(account.email ?? 'ChatGPT account')}${account.plan ? `<span class="plan"> · ${esc(account.plan)}</span>` : ''}</div></div>${iconButton('manage', 'more', 'Manage account', `data-id="${id}" ${snapshot.switching || preparingSwitch || switchPlan ? 'disabled' : ''}`)}</div><div class="limits">${limitRow('5 hour', account.fiveHour)}${limitRow('Weekly', account.weekly)}</div><div class="account-status ${account.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(account))}</div>${account.error ? `<p class="account-error">${esc(account.error)}</p>` : ''}${controls}${switchButton}</article>`;
 }
@@ -354,7 +475,7 @@ function savedAntigravityAccountCard(acc: AntigravityAccount) {
   const id = esc(acc.id);
   const initial = esc((acc.label || acc.email || 'A').charAt(0).toUpperCase());
   const primary = acc.groups[0];
-  const controls = managingAgy === acc.id ? `<form class="manage-form" data-form="rename-agy" data-id="${id}"><label class="field-label" for="agy-name-${id}">Account name</label><div class="inline-input"><input id="agy-name-${id}" name="label" value="${esc(acc.label)}" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button></div>${accountPreferenceControls(acc.id, 'antigravity')}<div class="manage-actions"><button type="button" class="text-button danger" data-action="disconnect-agy" data-id="${id}">${disconnectAgyConfirmation === acc.id ? 'Confirm remove' : 'Remove saved account'}</button></div></form>` : '';
+  const controls = managingAgy === acc.id ? `<form class="manage-form" data-form="rename-agy" data-id="${id}"><label class="field-label" for="agy-name-${id}">Account name</label><div class="inline-input"><input id="agy-name-${id}" name="label" value="${esc(acc.label)}" maxlength="48" required autocomplete="off" ${snapshot.settings.privacyMode ? 'disabled' : ''}/><button class="subtle-button" type="submit" ${snapshot.settings.privacyMode ? 'disabled' : ''}>Save</button></div>${accountPreferenceControls(acc.id, 'antigravity')}<div class="manage-actions"><button type="button" class="text-button danger" data-action="disconnect-agy" data-id="${id}">${disconnectAgyConfirmation === acc.id ? 'Confirm remove' : 'Remove saved account'}</button></div></form>` : '';
   return `<article class="account-card"><div class="account-heading"><span class="avatar">${initial}</span><div class="account-identity"><div class="account-name">${esc(acc.label)}<span class="active-badge">Saved AGY</span></div><div class="account-email" title="${esc(acc.email ?? '')}">${esc(acc.email ?? 'Google Antigravity account')}</div></div>${iconButton('manage-agy', 'more', 'Manage Antigravity account', `data-id="${id}"`)}</div>${primary ? `<div class="limits">${limitRow(`${primary.label} · 5h`, primary.fiveHour, 'antigravity')}${limitRow(`${primary.label} · Wk`, primary.weekly, 'antigravity')}</div>` : ''}<div class="account-status ${acc.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(acc))}</div>${acc.error ? `<p class="account-error">${esc(acc.error)}</p>` : ''}${controls}<button class="switch-account-button" data-action="switch-agy" data-id="${id}">${icon('swap')}<span>Switch Antigravity to ${esc(acc.label)}</span><span aria-hidden="true">→</span></button></article>`;
 }
 
@@ -364,8 +485,8 @@ function antigravitySection() {
   const selected = selectedAntigravityGroup(antigravity, snapshot.settings.notchSource);
   const savedAccounts = (antigravity.accounts ?? []).filter(a => !a.active);
   const activeSaved = (antigravity.accounts ?? []).find(a => a.active && a.id !== 'active');
-  const saveForm = savingAgy ? `<form class="manage-form agy-save-form" data-form="save-agy"><label class="field-label" for="agy-save-label">Save current Antigravity sign-in (${esc(antigravity.email ?? 'active')})</label><div class="inline-input"><input id="agy-save-label" name="label" value="${esc(activeSaved?.label ?? antigravity.email?.split('@')[0] ?? 'Personal')}" placeholder="Work or Personal" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button><button class="text-button" type="button" data-action="cancel-save-agy">Cancel</button></div></form>` : '';
-  return `<section class="provider-section" aria-label="Antigravity usage" ${accentStyle('antigravity')}><div class="section-divider"><div><span class="eyebrow">ANTIGRAVITY</span><div class="provider-heading"><h2>Model quotas<span class="account-count">${antigravity.groups.length}</span></h2><span class="account-status provider-status ${antigravity.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(antigravity))}</span></div>${antigravity.email ? `<div class="provider-email">${esc(antigravity.email)}${activeSaved ? ` · <strong>${esc(activeSaved.label)}</strong>` : ''}${!savingAgy ? ` <button type="button" class="text-button notch-pill" data-action="toggle-save-agy">${activeSaved ? 'Update saved' : 'Save sign-in'}</button>` : ''}</div>` : ''}</div></div>${saveForm}${antigravity.groups.map(group => antigravityGroupCard(group, selected?.id)).join('')}${savedAccounts.map(savedAntigravityAccountCard).join('')}${antigravity.groups.length === 0 ? `<div class="empty-state compact-empty"><h2>${snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity quota'}</h2><p>${esc(antigravity.error ?? 'Sign in with Antigravity CLI (agy) to view model quotas.')}</p></div>` : antigravity.error ? `<p class="account-error">${esc(antigravity.error)}</p>` : ''}</section>`;
+  const saveForm = savingAgy && !snapshot.settings.privacyMode ? `<form class="manage-form agy-save-form" data-form="save-agy"><label class="field-label" for="agy-save-label">Save current Antigravity sign-in (${esc(antigravity.email ?? 'active')})</label><div class="inline-input"><input id="agy-save-label" name="label" value="${esc(activeSaved?.label ?? antigravity.email?.split('@')[0] ?? 'Personal')}" placeholder="Work or Personal" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button><button class="text-button" type="button" data-action="cancel-save-agy">Cancel</button></div></form>` : '';
+  return `<section class="provider-section" aria-label="Antigravity usage" ${accentStyle('antigravity')}><div class="section-divider"><div><span class="eyebrow">ANTIGRAVITY</span><div class="provider-heading"><h2>Model quotas<span class="account-count">${antigravity.groups.length}</span></h2><span class="account-status provider-status ${antigravity.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(antigravity))}</span></div>${antigravity.email ? `<div class="provider-email">${esc(antigravity.email)}${activeSaved ? ` · <strong>${esc(activeSaved.label)}</strong>` : ''}${!savingAgy && !snapshot.settings.privacyMode ? ` <button type="button" class="text-button notch-pill" data-action="toggle-save-agy">${activeSaved ? 'Update saved' : 'Save sign-in'}</button>` : ''}</div>` : ''}</div></div>${saveForm}${antigravity.groups.map(group => antigravityGroupCard(group, selected?.id)).join('')}${savedAccounts.map(savedAntigravityAccountCard).join('')}${antigravity.groups.length === 0 ? `<div class="empty-state compact-empty"><h2>${snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity quota'}</h2><p>${esc(antigravity.error ?? 'Sign in with Antigravity CLI (agy) to view model quotas.')}</p></div>` : antigravity.error ? `<p class="account-error">${esc(antigravity.error)}</p>` : ''}</section>`;
 }
 
 function switchPanel() {
@@ -374,7 +495,7 @@ function switchPanel() {
   const plan = switchPlan;
   const provider = plan.provider === 'antigravity' ? 'Antigravity' : 'Codex';
   const running = plan.processNames.length > 0;
-  return `<section class="switch-panel" role="dialog" aria-labelledby="switch-title"><div class="section-heading"><h2 id="switch-title">Switch ${provider} account</h2>${iconButton('cancel-switch', 'x', 'Cancel account switch')}</div><div class="switch-route"><span>Current sign-in</span>${icon('swap')}<strong>${esc(plan.label)}</strong></div><span class="switch-targets">${provider} desktop + CLI</span><p>${running ? `Continuing force-closes these apps and related terminal sessions: ${plan.processNames.map(esc).join(', ')}. Running tasks will stop and unsaved work may be lost. Desktop apps will reopen after switching; start new terminal sessions yourself.` : `New ${provider} sessions will use this account. If a session starts before you confirm, the switch will ask you to check again.`}</p><button id="confirm-switch" class="primary-button" data-action="confirm-switch">${running ? 'Close sessions and switch' : 'Switch account'}<span aria-hidden="true">→</span></button><p class="switch-footnote">Your current account stays connected in YouSage.</p></section>`;
+  return `<section class="switch-panel" role="dialog" aria-labelledby="switch-title"><div class="section-heading"><h2 id="switch-title">Switch ${provider} account</h2>${iconButton('cancel-switch', 'x', 'Cancel account switch')}</div><div class="switch-route"><span>Current sign-in</span>${icon('swap')}<strong>${esc(redact(plan.label))}</strong></div><span class="switch-targets">${provider} desktop + CLI</span><p>${running ? `Continuing force-closes these apps and related terminal sessions: ${plan.processNames.map(name => esc(redact(name))).join(', ')}. Running tasks will stop and unsaved work may be lost. Desktop apps will reopen after switching; start new terminal sessions yourself.` : `New ${provider} sessions will use this account. If a session starts before you confirm, the switch will ask you to check again.`}</p><button id="confirm-switch" class="primary-button" data-action="confirm-switch">${running ? 'Close sessions and switch' : 'Switch account'}<span aria-hidden="true">→</span></button><p class="switch-footnote">Your current account stays connected in YouSage.</p></section>`;
 }
 
 function settingsPanel() {
@@ -404,13 +525,13 @@ function settingsPanel() {
       : update.updateAvailable && update.latestVersion
         ? `Update v${update.latestVersion} available`
         : `Up to date (v${update.currentVersion})`;
-  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${appearanceSettings()}<label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="custom" ${currentSource === 'custom' ? 'selected' : ''}>Custom combination</option><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label>${customPreviewSettings()}<div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Windows notifications</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><div class="setting-row"><span class="fine-print">Low-allowance & reset alerts</span><button type="button" class="subtle-button" data-action="test-notification" ${settings.notificationsEnabled ? '' : 'disabled'}>Send test notification</button></div>${alertSettings()}<div class="settings-group"><h3>Account suggestions</h3><label class="setting-row" for="recommendation-purpose"><span>Suggest accounts for</span><select id="recommendation-purpose">${(['any', 'work', 'personal'] as const).map(value => `<option value="${value}" ${preferences().recommendationPurpose === value ? 'selected' : ''}>${value === 'any' ? 'Any purpose' : value === 'work' ? 'Work' : 'Personal'}</option>`).join('')}</select></label><p class="fine-print">Set an account’s purpose or exclude it through Manage account. Suggestions use fresh readings and reset times.</p></div>${connectionHealthSettings()}<label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
+  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${appearanceSettings()}<label class="setting-row" for="privacy-mode"><span>Privacy mode</span><input class="switch" id="privacy-mode" type="checkbox" ${settings.privacyMode ? 'checked' : ''}/></label><p class="fine-print">Hide account names and emails across the app and notifications. Alt+Shift+P toggles privacy anywhere.</p>${historySettings()}<label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="custom" ${currentSource === 'custom' ? 'selected' : ''}>Custom combination</option><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label>${customPreviewSettings()}<div class="subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div><label class="setting-row" for="notifications"><span>Windows notifications</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><div class="setting-row"><span class="fine-print">Low-allowance & reset alerts</span><button type="button" class="subtle-button" data-action="test-notification" ${settings.notificationsEnabled ? '' : 'disabled'}>Send test notification</button></div>${notificationHealthSettings()}${alertSettings()}<div class="settings-group"><h3>Account suggestions</h3><label class="setting-row" for="recommendation-purpose"><span>Suggest accounts for</span><select id="recommendation-purpose">${(['any', 'work', 'personal'] as const).map(value => `<option value="${value}" ${preferences().recommendationPurpose === value ? 'selected' : ''}>${value === 'any' ? 'Any purpose' : value === 'work' ? 'Work' : 'Personal'}</option>`).join('')}</select></label><p class="fine-print">Set an account’s purpose or exclude it through Manage account. Suggestions use fresh readings and reset times.</p></div>${connectionHealthSettings()}<label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U anywhere to show or toggle the notch.</p></section>`;
 }
 
 function addPanel() {
   const signingIn = snapshot.login && !snapshot.login.error;
   if (signingIn) return `<section class="add-panel"><div class="connection-symbol">${icon('plus')}</div><h2>${esc(snapshot.login!.status)}</h2><p>Your current Codex sign-in stays connected.</p><button class="subtle-button" data-action="cancel-login">Cancel sign-in</button></section>`;
-  if (!adding) return '';
+  if (!adding || snapshot.settings.privacyMode) return '';
   return `<section class="add-panel"><div class="section-heading"><h2>Connect an account</h2>${iconButton('cancel-add', 'x', 'Cancel')}</div><form data-form="connect"><label class="field-label" for="account-label">Account name</label><input id="account-label" name="label" placeholder="Work or Personal" maxlength="48" autocomplete="off" required/><p>Sign in with ChatGPT in your browser. You only need to do this once per account.</p><button class="primary-button" type="submit">Continue in browser <span aria-hidden="true">↗</span></button></form></section>`;
 }
 
@@ -418,11 +539,17 @@ function render(autoSync = true) {
   // Background snapshots must not replace the shell mid-animation.
   if (transition && autoSync) return;
   if (dragging || colorPickerOpen || rendering) return;
+  const rawSnapshot = snapshot;
+  const privacyChanged = renderedPrivacy !== Boolean(rawSnapshot.settings.privacyMode);
+  if (privacyChanged && rawSnapshot.settings.privacyMode) { adding = false; savingAgy = false; }
+  renderSourceSnapshot = rawSnapshot;
+  snapshot = privacySnapshot(rawSnapshot);
+  try {
   applyAppTheme(snapshot.settings.appTheme ?? defaultAppTheme);
   const focused = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
   const focusTarget = focused ? { id: focused.id, action: focused.dataset.action, accountId: focused.dataset.id, restore: document.hasFocus() } : null;
-  const preserved = focused instanceof HTMLInputElement && ['text', 'search', 'number', 'time'].includes(focused.type) ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
-  const nameDrafts = Array.from(root.querySelectorAll<HTMLInputElement>('input:not([type]), input[type="text"], input[type="search"]')).map(input => ({ id: input.id, value: input.value }));
+  const preserved = focused instanceof HTMLInputElement && (!(privacyChanged || snapshot.settings.privacyMode) || ['number', 'time'].includes(focused.type)) && ['text', 'search', 'number', 'time'].includes(focused.type) ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
+  const nameDrafts = privacyChanged || snapshot.settings.privacyMode ? [] : Array.from(root.querySelectorAll<HTMLInputElement>('input:not([type]), input[type="text"], input[type="search"]')).map(input => ({ id: input.id, value: input.value }));
   const scrollTop = root.querySelector('.panel-scroll')?.scrollTop ?? 0;
   const accounts = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId);
   const desktop = snapshot.accounts.find(account => account.id === snapshot.activeAccountId);
@@ -457,7 +584,7 @@ function render(autoSync = true) {
   const notchProvider = selected ?? 'codex';
   root.className = `${expanded ? 'expanded' : ''} ${upward ? 'upward' : ''} ${opening ? 'opening' : ''} ${preparingOpen ? 'preparing-open' : ''}`;
   rendering = true;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} class="compact ${providers.length === 3 ? 'three-providers' : ''}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${esc(subtitle)}</span></span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(error || snapshot.login!.error!)}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(notice)}</div>` : ''}${alertsBanner()}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : ''}${switchPanel()}${visible('codex') ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} class="compact ${providers.length === 3 ? 'three-providers' : ''}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="brand-mark" aria-hidden="true"><img src="${notchMark}" width="24" height="24" alt="" draggable="false"/></span><span class="compact-identity"><span class="compact-title">${esc(title)}</span><span class="compact-subtitle">${esc(subtitle)}</span></span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon('chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(redact(error || snapshot.login!.error!))}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(redact(notice))}</div>` : ''}${alertsBanner()}${historyOpen ? historyPanel() : ''}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : ''}${switchPanel()}${visible('codex') ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('history', 'history', 'History & pace', `aria-pressed="${historyOpen}"`)}${iconButton('privacy', 'privacy', 'Toggle privacy mode', `aria-pressed="${Boolean(snapshot.settings.privacyMode)}"`)}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   rendering = false;
   if (scroll) scroll.scrollTop = scrollTop;
@@ -475,6 +602,12 @@ function render(autoSync = true) {
   if (focusTarget?.restore) {
     const target = focusTarget.id ? document.getElementById(focusTarget.id) : Array.from(root.querySelectorAll<HTMLElement>('[data-action]')).find(element => element.dataset.action === focusTarget.action && element.dataset.id === focusTarget.accountId);
     target?.focus({ preventScroll: true });
+  }
+  renderedPrivacy = Boolean(rawSnapshot.settings.privacyMode);
+  } finally {
+    snapshot = rawSnapshot;
+    renderSourceSnapshot = null;
+    rendering = false;
   }
   if (expanded && autoSync) void syncHeight();
 }
@@ -511,7 +644,7 @@ async function toggle(open = !expanded) {
     opening = false;
     root.classList.add('closing');
     await new Promise(resolve => setTimeout(resolve, motionMs(CLOSE_MS)));
-    expanded = false; settingsOpen = false; adding = false; savingAgy = false; managing = null; managingAgy = null; disconnectConfirmation = null; disconnectAgyConfirmation = null; switchPlan = null; desiredHeight = 0;
+    expanded = false; settingsOpen = false; historyOpen = false; historyRequest++; clearTimeout(historyRefreshTimer); adding = false; savingAgy = false; managing = null; managingAgy = null; disconnectConfirmation = null; disconnectAgyConfirmation = null; switchPlan = null; desiredHeight = 0;
     applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   }
   transition = false;
@@ -522,6 +655,27 @@ async function attempt(action: () => Promise<unknown>) {
   error = '';
   try { await action(); } catch (err) { error = err instanceof Error ? err.message : String(err); }
   render();
+}
+
+async function setPrivacy(enabled: boolean) {
+  await call('set_privacy_mode', { enabled });
+  snapshot = await call<Snapshot>('get_snapshot');
+  if (enabled) { adding = false; savingAgy = false; }
+  notice = enabled ? 'Privacy mode on. Account names and emails are hidden.' : 'Privacy mode off.';
+}
+
+async function exportHistory() {
+  const privateAtStart = Boolean(snapshot.settings.privacyMode);
+  const csv = await call<string>('export_usage_history', { rangeHours: historyRange });
+  if (privateAtStart !== Boolean(snapshot.settings.privacyMode)) throw new Error('Privacy mode changed during export. Export again to use the current setting.');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `yousage-history-${historyRange === 24 ? '24h' : '7d'}.csv`;
+  document.body.append(link);
+  link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  notice = snapshot.settings.privacyMode ? 'History exported with private account aliases.' : 'History exported to CSV.';
 }
 
 async function prepareSwitch(id: string, provider: 'codex' | 'antigravity' = 'codex') {
@@ -552,7 +706,27 @@ root.addEventListener('click', event => {
   const id = target.dataset.id;
   switch (target.dataset.action) {
     case 'toggle': if (!suppressToggleClick) void attempt(() => toggle()); break;
-    case 'refresh': void attempt(() => call('refresh_usage')); break;
+    case 'refresh': void attempt(async () => { await call('refresh_usage'); if (historyOpen) await loadHistory(); }); break;
+    case 'history':
+      historyOpen = !historyOpen; clearHistoryConfirmation = false;
+      if (historyOpen) { void loadHistory(); root.querySelector('.history-panel')?.scrollIntoView({ block: 'start' }); }
+      else { historyRequest++; clearTimeout(historyRefreshTimer); historyLoading = false; render(); }
+      break;
+    case 'history-range': {
+      const range = Number(target.dataset.hours);
+      if ((range === 24 || range === 168) && range !== historyRange) { historyRange = range; void loadHistory(); }
+      break;
+    }
+    case 'refresh-history': void loadHistory(); break;
+    case 'export-history': void attempt(exportHistory); break;
+    case 'clear-history':
+      if (!clearHistoryConfirmation) { clearHistoryConfirmation = true; render(); }
+      else void attempt(async () => { await call('clear_usage_history'); clearHistoryConfirmation = false; history = null; if (historyOpen) await loadHistory(); notice = 'Local history cleared. Fresh checks will start a new history.'; });
+      break;
+    case 'cancel-clear-history': clearHistoryConfirmation = false; render(); break;
+    case 'privacy': void attempt(() => setPrivacy(!snapshot.settings.privacyMode)); break;
+    case 'check-notifications': void checkNotifications(); break;
+    case 'open-notification-settings': void attempt(() => call('open_notification_settings')); break;
     case 'refresh-health': {
       const provider = target.dataset.provider as Provider;
       const health = snapshot.health?.[provider];
@@ -563,14 +737,14 @@ root.addEventListener('click', event => {
     case 'snooze-alerts': void attempt(() => savePreferences({ ...preferences(), alertRules: { ...preferences().alertRules, snoozedUntil: Math.floor(Date.now() / 1000) + 3600 } })); break;
     case 'resume-alerts': void attempt(() => savePreferences({ ...preferences(), alertRules: { ...preferences().alertRules, snoozedUntil: null } })); break;
     case 'hide': void attempt(async () => { await call('hide_notch'); expanded = false; if (preview) root.style.height = '80px'; }); break;
-    case 'settings': settingsOpen = !settingsOpen; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'start' }); break;
+    case 'settings': settingsOpen = !settingsOpen; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'start' }); if (settingsOpen) void checkNotifications(); break;
     case 'reset-app-theme': void attempt(() => call('update_settings', { ...snapshot.settings, appTheme: { ...defaultAppTheme } })); break;
-    case 'add': adding = true; error = ''; render(); document.getElementById('account-label')?.focus(); break;
+    case 'add': if (snapshot.settings.privacyMode) { notice = 'Turn off privacy mode to connect an account.'; render(); break; } adding = true; error = ''; render(); document.getElementById('account-label')?.focus(); break;
     case 'cancel-add': adding = false; render(); break;
     case 'cancel-login': void attempt(() => call('cancel_sign_in')); break;
     case 'manage': managing = managing === id ? null : id!; disconnectConfirmation = null; render(); break;
     case 'manage-agy': managingAgy = managingAgy === id ? null : id!; disconnectAgyConfirmation = null; render(); break;
-    case 'toggle-save-agy': savingAgy = !savingAgy; render(); document.getElementById('agy-save-label')?.focus(); break;
+    case 'toggle-save-agy': if (snapshot.settings.privacyMode) return; savingAgy = !savingAgy; render(); document.getElementById('agy-save-label')?.focus(); break;
     case 'cancel-save-agy': savingAgy = false; render(); break;
     case 'switch-agy': if (id) void attempt(() => prepareSwitch(id, 'antigravity')); break;
     case 'disconnect-agy':
@@ -578,7 +752,14 @@ root.addEventListener('click', event => {
       else void attempt(async () => { await call('disconnect_antigravity_account', { id }); managingAgy = null; disconnectAgyConfirmation = null; });
       break;
     case 'dismiss-alert': if (id) void attempt(() => call('dismiss_alert', { id })); break;
-    case 'test-notification': void attempt(async () => { await call('test_notification'); notice = 'Test sent to Windows. Check Notification Center if no banner appears.'; }); break;
+    case 'test-notification': void attempt(async () => {
+      notice = '';
+      try {
+        const result = await call<NotificationStatus>('test_notification');
+        if (result) notificationStatus = result;
+        notice = result && result.availability !== 'available' ? 'Windows is blocking notifications. Check the status in Settings.' : 'Windows accepted the test notification. A banner depends on Windows settings; check Notification Center too.';
+      } finally { await checkNotifications(); }
+    }); break;
     case 'check-updates': void attempt(() => call('check_for_updates')); break;
     case 'open-release': {
       const url = target.dataset.url;
@@ -608,6 +789,7 @@ root.addEventListener('click', event => {
 root.addEventListener('submit', event => {
   const form = event.target as HTMLFormElement;
   event.preventDefault();
+  if (snapshot.settings.privacyMode) { error = 'Turn off privacy mode before editing account names.'; render(); return; }
   const label = String(new FormData(form).get('label') ?? '').trim();
   if (!label) return;
   if (form.dataset.form === 'connect') void attempt(async () => { await call('connect_account', { label, reconnectId: null }); adding = false; });
@@ -627,6 +809,12 @@ root.addEventListener('input', event => {
 
 root.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
+  if (input.id === 'privacy-mode') { void attempt(() => setPrivacy(input.checked)); return; }
+  if (input.id === 'history-series') { historySeriesId = input.value; render(); return; }
+  if (input.id === 'history-retention') {
+    void attempt(async () => { await call('update_history_settings', { retentionDays: Number(input.value) }); snapshot = await call<Snapshot>('get_snapshot'); if (historyOpen) await loadHistory(); });
+    return;
+  }
   if (input.dataset.notchProvider || input.id === 'notch-window' || input.id === 'notch-group' || input.id === 'notch-source' && input.value === 'custom') {
     const prefs = preferences();
     const currentProviders = notchProviders(snapshot.settings.notchSource, prefs, []);
@@ -761,13 +949,14 @@ async function start() {
     if (preferenceDraft) snapshot.settings.usagePreferences = preferenceDraft;
     if (notchSourceDraft) snapshot.settings.notchSource = notchSourceDraft;
     render();
+    scheduleHistoryRefresh();
   });
   await listen<NotchLayout>('notch-layout', event => { applyLayout(event.payload); });
   await listen('hotkey-toggle', () => { if (!transition) void toggle(); });
   await listen('collapse-requested', () => { if (expanded && !transition && !dragging && !colorPickerOpen) void toggle(false); });
   await listen('notch-focused', () => { if (colorPickerOpen) { colorPickerOpen = false; render(); } });
   await listen('notch-drag-finished', () => { dragging = false; render(); });
-  await listen('panel-collapsed', () => { expanded = false; transition = false; switchPlan = null; desiredHeight = 0; render(); });
+  await listen('panel-collapsed', () => { historyOpen = false; historyRequest++; clearTimeout(historyRefreshTimer); expanded = false; transition = false; switchPlan = null; desiredHeight = 0; render(); });
   snapshot = await call<Snapshot>('get_snapshot');
   applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   render();
