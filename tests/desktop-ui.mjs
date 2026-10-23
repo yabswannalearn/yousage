@@ -331,6 +331,29 @@ try {
     assert.equal(await page.locator('#alert-resetEnabled').isChecked(), false, 'changing preview source must retain queued alert changes');
     await page.locator('#alert-resetEnabled').check();
   }
+  // Verify Settings category tabs, theme presets, provider swatches, smart notch, provider filter pills, inline pacing, and hotkey/tray events.
+  await page.locator('[data-action="settings-tab"][data-tab="appearance"]').click();
+  assert.equal(await page.locator('[data-action="theme-preset"]').count(), 4);
+  await page.locator('[data-action="theme-preset"][data-bg="#141820"]').click();
+  assert.equal(await page.getByLabel('App background', { exact: true }).inputValue(), '#141820');
+  await page.locator('[data-action="provider-swatch"][data-provider="codex"][data-color-value="#7eb2dd"]').click();
+  assert.equal(await page.getByLabel('Codex color', { exact: true }).inputValue(), '#7eb2dd');
+  await page.locator('[data-action="settings-tab"][data-tab="all"]').click();
+  await page.locator('#smart-notch').check();
+  assert.equal(await page.evaluate(() => window.testBridge.snapshot.settings.usagePreferences.smartNotch), true);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.evaluate(() => {
+    window.testBridge.snapshot.pacing = { 'codex:desktop::fiveHour': { percentagePointsPerHour: 14, estimatedExhaustsAt: Math.floor(Date.now() / 1000) + 3600, resetAt: Math.floor(Date.now() / 1000) + 7200, mayRunOutBeforeReset: true, observedMinutes: 45 } };
+    window.testBridge.emit('usage-updated', window.testBridge.snapshot);
+  });
+  assert.equal(await page.locator('.inline-pacing').first().isVisible(), true);
+  await page.locator('[data-action="filter-provider"][data-provider="claude"]').click();
+  assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 1);
+  assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 0);
+  await page.locator('[data-action="filter-provider"][data-provider="all"]').click();
+  assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 1);
+  await page.evaluate(() => window.testBridge.emit('hotkey-cycle-notch'));
+  await page.waitForFunction(() => window.testBridge.snapshot.settings.notchSource !== 'codex');
   assert.deepEqual(failures, []);
   console.log('Desktop UI passed: drag, themes, custom provider/window previews, preference persistence and validation, cooldown health and recovery, Codex/Antigravity filtered suggestions and confirmed switching.');
 } finally { await browser.close(); }

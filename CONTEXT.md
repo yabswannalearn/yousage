@@ -5,7 +5,7 @@ YouSage lets a person keep track of Codex usage across their personal and work a
 ## Language
 
 **App theme**:
-The background and shared UI accent chosen under **Settings → Appearance**. It applies to the notch and detail panel, with derived readable text and control surfaces. Subscription colors are independent. **Reset colors** restores the charcoal/sage app theme while preserving subscription preferences.
+The background and shared UI accent chosen under **Settings → Appearance**, with curated presets (**Charcoal**, **Obsidian**, **Warm Slate**, **Daylight**) and custom hex pickers. It applies to the notch and detail panel, with derived readable text and control surfaces. Subscription colors are independent and include quick swatches. **Reset colors** restores the charcoal/sage app theme while preserving subscription preferences.
 
 **Subscription**:
 A usage source shown in YouSage: Codex, Antigravity, or Claude. Each has a custom accent color and a visibility switch in Settings. Hiding a subscription keeps its sign-in and preferences, omits its readings and alerts, and lets the person restore it later. Background usage checks continue while hidden. If all are hidden, Settings remain accessible.
@@ -31,7 +31,7 @@ Choosing a **Connected account** to use in both the Codex desktop app and Codex 
 A quota group reported by the local Antigravity CLI (`agy`), such as **Gemini Models**, **Claude and GPT models**, or **Gemini 4 Argon**. Each group reports its own **Usage remaining** and **Reset time** across five-hour and weekly **Usage windows**.
 
 **Notch preview**:
-The reading currently displayed in the compact **Notch**—the **Active account** in Codex, a chosen **Antigravity model group**, the **Claude subscription**, or a custom combination. Custom previews can show the five-hour window, weekly window, or the most constrained available window (the lowest remaining percentage). A fallback reading keeps its actual window label. Hiding the preferred source temporarily falls back to another visible subscription, without forgetting the preference.
+The reading currently displayed in the compact **Notch**—the **Active account** in Codex, a chosen **Antigravity model group**, the **Claude subscription**, or a custom combination. Custom previews can show the five-hour window, weekly window, or the most constrained available window (the lowest remaining percentage). Enabling **Smart auto-focus** temporarily promotes the most constrained visible subscription when it drops at or below its warning threshold. Press `Alt+Shift+N` or use the tray menu to cycle visible preview sources. A fallback reading keeps its actual window label. Hiding the preferred source temporarily falls back to another visible subscription, without forgetting the preference.
 
 **Connection health**:
 The state of a subscription's usage connection, including the last successful check, next scheduled check or eligible retry, and recovery instructions. A failed refresh keeps cached readings visibly dated; a retry respects provider cooldowns.

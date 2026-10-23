@@ -61,6 +61,7 @@ export type PreviewWindowMode = 'fiveHour' | 'weekly' | 'limiting';
 export interface UsagePreferences {
   notchProviders: Provider[];
   notchWindow: PreviewWindowMode;
+  smartNotch?: boolean;
   alertRules: Record<Provider, { warningPercent: number; criticalPercent: number }> & {
     lowEnabled: boolean;
     resetEnabled: boolean;
@@ -111,6 +112,7 @@ export function usagePreferences(settings?: { usagePreferences?: unknown } | nul
     accountPreferences: {},
     recommendationPurpose: purpose(saved.recommendationPurpose),
   };
+  if (typeof saved.smartNotch === 'boolean') normalized.smartNotch = saved.smartNotch;
   // Preserve the order selected by the person, while removing duplicates.
   if (Array.isArray(saved.notchProviders)) normalized.notchProviders = [...new Set(saved.notchProviders.filter((provider): provider is Provider => providers.includes(provider as Provider)))];
   for (const provider of providers) {
@@ -216,6 +218,22 @@ export function effectiveNotchSource(source: string, hidden: readonly string[] =
   return (['codex', 'antigravity', 'claude'] as const).find(visible) ?? 'none';
 }
 
+export function cycleNotchSource(currentSource: string, hidden: readonly string[] = [], antigravity?: AntigravityStatus | null): string {
+  const visible = (provider: Provider) => !hidden.includes(provider);
+  const groupId = selectedAntigravityGroup(antigravity, currentSource)?.id ?? antigravity?.groups[0]?.id;
+  const agySource = groupId ? `antigravity:${groupId}` : 'antigravity';
+  const bothSource = groupId ? `both:${groupId}` : 'both';
+  const cycle: string[] = [];
+  if (visible('codex')) cycle.push('codex');
+  if (visible('antigravity')) cycle.push(agySource);
+  if (visible('claude')) cycle.push('claude');
+  if (visible('codex') && visible('antigravity')) cycle.push(bothSource);
+  if (!cycle.length) return 'none';
+  const effective = effectiveNotchSource(currentSource, hidden);
+  const index = cycle.findIndex(item => item === effective || (item.startsWith('antigravity') && isAntigravityNotch(effective)) || (item.startsWith('both') && isBothNotch(effective)));
+  return cycle[(index + 1) % cycle.length];
+}
+
 export interface Alert {
   id: string;
   title: string;
@@ -245,6 +263,7 @@ export interface Snapshot {
   login: { status: string; error: string | null } | null;
   switching: string | null;
   health?: Record<Provider, ProviderHealth>;
+  pacing?: Record<string, PacingEstimate>;
   settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number };
 }
 
@@ -403,6 +422,60 @@ function activeBottleneck(reading: AllowanceReading, now: number, warningPercent
     .filter(([, window]) => window.remaining <= warningPercent && (window.resetsAt == null || window.resetsAt - now / 1000 > recommendationFreshnessSeconds))
     .map(([label, window]) => ({ label, remaining: window.remaining, resetsAt: window.resetsAt }))
     .sort((a, b) => a.remaining - b.remaining)[0] ?? null;
+}
+
+export interface SmartNotchFocus {
+  provider: Provider;
+  source: string;
+  remaining: number;
+  label: string;
+}
+
+/** When smartNotch is enabled, surface the most constrained visible subscription below its warning threshold. */
+export function smartNotchFocus(snapshot: Snapshot, preferences = usagePreferences(snapshot.settings), now = Date.now()): SmartNotchFocus | null {
+  if (!preferences.smartNotch) return null;
+  const hidden = snapshot.settings.hiddenProviders ?? [];
+  const visible = (provider: Provider) => !hidden.includes(provider);
+  const currentProviders = notchProviders(snapshot.settings.notchSource, preferences, hidden);
+  const candidates: SmartNotchFocus[] = [];
+  if (visible('codex')) {
+    const active = uniqueAccounts(snapshot.accounts, snapshot.activeAccountId).find(a => isActiveAccount(a, snapshot.accounts, snapshot.activeAccountId));
+    if (active && readingCapacity(active, now, false, false)) {
+      const low = activeBottleneck(active, now, preferences.alertRules.codex.warningPercent);
+      if (low) candidates.push({ provider: 'codex', source: 'codex', remaining: low.remaining, label: active.label });
+    }
+  }
+  if (visible('antigravity') && snapshot.antigravity.groups.length) {
+    for (const group of snapshot.antigravity.groups) {
+      const reading = { ...group, updatedAt: snapshot.antigravity.updatedAt, error: snapshot.antigravity.error };
+      if (!readingCapacity(reading, now, false, false)) continue;
+      const low = activeBottleneck(reading, now, preferences.alertRules.antigravity.warningPercent);
+      if (low) candidates.push({ provider: 'antigravity', source: `antigravity:${group.id}`, remaining: low.remaining, label: group.label });
+    }
+  }
+  if (visible('claude') && readingCapacity(snapshot.claude, now, false, false)) {
+    const low = activeBottleneck(snapshot.claude, now, preferences.alertRules.claude.warningPercent);
+    if (low) candidates.push({ provider: 'claude', source: 'claude', remaining: low.remaining, label: 'Claude' });
+  }
+  candidates.sort((a, b) => a.remaining - b.remaining);
+  const best = candidates[0];
+  if (!best) return null;
+  if (currentProviders.includes(best.provider)) {
+    if (best.provider !== 'antigravity') return null;
+    const currentGroup = selectedAntigravityGroup(snapshot.antigravity, snapshot.settings.notchSource);
+    if (currentGroup && `antigravity:${currentGroup.id}` === best.source) return null;
+  }
+  return best;
+}
+
+export function formatInlinePacing(pacing: PacingEstimate | null | undefined, now = Date.now()): { label: string; rateLabel: string; attention: boolean } | null {
+  if (!pacing || !Number.isFinite(pacing.percentagePointsPerHour) || pacing.percentagePointsPerHour <= 0) return null;
+  const rate = pacing.percentagePointsPerHour.toFixed(1).replace(/\.0$/, '');
+  const rateLabel = `${rate}%/h`;
+  if (pacing.mayRunOutBeforeReset) {
+    return { label: `May run out ${compactResetLabel(pacing.estimatedExhaustsAt, now)}`, rateLabel, attention: true };
+  }
+  return { label: 'Pace steady until reset', rateLabel, attention: false };
 }
 
 function canRecommend(provider: 'codex' | 'antigravity', id: string, preferences: UsagePreferences): boolean {

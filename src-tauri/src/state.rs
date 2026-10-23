@@ -87,6 +87,8 @@ pub struct Snapshot {
     pub switching: Option<String>,
     pub settings: Settings,
     pub health: Health,
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub pacing: std::collections::HashMap<String, crate::history::PacingEstimate>,
 }
 
 pub struct AppState {
@@ -140,7 +142,7 @@ impl AppState {
         let claude_next_refresh = health.claude.next_retry_at.unwrap_or_default().max(0) as u64;
         let alert_history = load_alert_history(&directory);
         let usage_history = crate::history::HistoryStore::load(&directory, config.history_retention_days, now());
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             accounts: cached,
             active_account_id: None,
             antigravity,
@@ -164,7 +166,9 @@ impl AppState {
                 history_retention_days: config.history_retention_days,
             },
             health,
+            pacing: std::collections::HashMap::new(),
         };
+        snapshot.pacing = usage_history.pacing_map(&snapshot, now());
         Ok(Self {
             config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(alert_history), usage_history: Mutex::new(usage_history), directory, persist_guard: Mutex::new(()),
             io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), switch_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
@@ -328,7 +332,12 @@ pub async fn refresh_all(app: AppHandle) {
         let _ = app.emit("usage-alert", alert);
     }
     let snapshot = state.snapshot.lock().unwrap().clone();
-    state.usage_history.lock().unwrap().capture(&snapshot, now());
+    let pacing = {
+        let mut history = state.usage_history.lock().unwrap();
+        history.capture(&snapshot, now());
+        history.pacing_map(&snapshot, now())
+    };
+    state.snapshot.lock().unwrap().pacing = pacing;
     state.emit(&app);
     let _ = state.persist();
 }

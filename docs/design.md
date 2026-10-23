@@ -27,7 +27,7 @@ The detail panel unfolds in place above or below the notch. It organizes visible
 
 Custom notch previews use one labeled reading per selected provider, including combinations with Claude. Keep the provider and actual window visible even when a five-hour reading falls back to weekly data. The most-constrained mode selects the available window with the lowest remaining percentage. Fit three readings within the existing floating, horizontal, and vertical bounds; the notch should remain a compact instrument.
 
-Settings groups preview controls, alert rules, recommendation purpose, and connection health. Alert percentages mean allowance remaining. Keep last-success ages and retry countdowns visible alongside connection failures, and provide copyable sign-in commands when applicable. Account management holds work/personal purpose and suggestion exclusions. Recommendations explain their capacity comparison and use the existing account-switch review.
+Settings organizes controls into tabbed category pods (**All**, **Preview**, **Theme**, **Alerts**, **System**) covering preview controls, curated theme presets and subscription swatches, alert rules, recommendation purpose, and connection health. Alert percentages mean allowance remaining. Keep last-success ages and retry countdowns visible alongside connection failures, and provide copyable sign-in commands when applicable. Account management holds work/personal purpose and suggestion exclusions. Recommendations explain their capacity comparison and use the existing account-switch review. Account cards surface inline pacing estimates when available, and the history trace includes a comparison toggle to overlay peer accounts in the same usage window.
 
 ## Interaction
 

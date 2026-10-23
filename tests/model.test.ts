@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { percentage, resetLabel, uniqueAccounts, isActiveAccount, isAntigravityNotch, isBothNotch, selectedAntigravityGroup, suggestedCodexSwitch, freshness, escapeHtml, type Account, type AntigravityStatus } from '../src/model.ts';
-import { effectiveNotchSource, providerColor, compactResetLabel, usagePreferences, defaultUsagePreferences, notchProviders, previewWindow, codexRecommendation, antigravityRecommendation, type Provider, type AntigravityAccount, type AntigravityGroup } from '../src/model.ts';
+import { effectiveNotchSource, providerColor, compactResetLabel, usagePreferences, defaultUsagePreferences, notchProviders, previewWindow, codexRecommendation, antigravityRecommendation, cycleNotchSource, smartNotchFocus, formatInlinePacing, type Provider, type AntigravityAccount, type AntigravityGroup } from '../src/model.ts';
 
 test('compact reset text preserves unknown and due states and rounds future minutes up', () => {
   const now = 1000000;
@@ -266,4 +266,37 @@ test('Antigravity recommendations reject matching groups with stale, excluded, o
   for (const candidate of invalid) assert.equal(antigravityRecommendation({ ...status, accounts: [candidate] }, 'gemini', preferences, recommendationNow), null);
   const excluded = usagePreferences({ usagePreferences: { accountPreferences: { 'antigravity:candidate': { purpose: 'any', excludeFromSuggestions: true } } } });
   assert.equal(antigravityRecommendation({ ...status, accounts: [agyAccount('candidate', [modelGroup('gemini', 90)])] }, 'gemini', excluded, recommendationNow), null);
+});
+
+test('cycleNotchSource cycles visible subscriptions and preserves selected Antigravity group', () => {
+  const agy: AntigravityStatus = { email: 'dev@example.com', updatedAt: recommendationSeconds, error: null, groups: [modelGroup('gemini-models', 85)] };
+  assert.equal(cycleNotchSource('codex', [], agy), 'antigravity:gemini-models');
+  assert.equal(cycleNotchSource('antigravity:gemini-models', [], agy), 'claude');
+  assert.equal(cycleNotchSource('claude', [], agy), 'both:gemini-models');
+  assert.equal(cycleNotchSource('both:gemini-models', [], agy), 'codex');
+  assert.equal(cycleNotchSource('codex', ['antigravity'], agy), 'claude');
+  assert.equal(cycleNotchSource('claude', ['antigravity'], agy), 'codex');
+});
+
+test('smartNotchFocus promotes the most constrained visible subscription when below warning threshold', () => {
+  const prefs = usagePreferences({ usagePreferences: { smartNotch: true } });
+  assert.equal(prefs.smartNotch, true);
+  const activeCodex = freshAccount('desktop', 75, 80, { desktop: true });
+  const status: AntigravityStatus = { email: 'dev@example.com', updatedAt: recommendationSeconds, error: null, groups: [modelGroup('gemini', 85)] };
+  const lowClaude = { email: 'c@example.com', plan: 'pro', fiveHour: { remaining: 14, resetsAt: recommendationSeconds + 3600 }, weekly: { remaining: 60, resetsAt: recommendationSeconds + 86400 }, updatedAt: recommendationSeconds, error: null };
+  const snapshot = {
+    accounts: [activeCodex], activeAccountId: 'desktop', antigravity: status, claude: lowClaude,
+    alerts: [], update: { currentVersion: '0.1.0', latestVersion: null, releaseUrl: null, installerUrl: null, updateAvailable: false, checking: false, error: null },
+    refreshing: false, desktopError: null, login: null, switching: null,
+    settings: { startWithWindows: false, refreshSeconds: 60, notchSource: 'codex', notificationsEnabled: true, providerColors: { codex: '#b7c8b1', antigravity: '#8ab4d8', claude: '#d99a7c' }, hiddenProviders: [], appTheme: { background: '#202221', accent: '#b7c8b1' }, usagePreferences: prefs },
+  };
+  assert.equal(smartNotchFocus(snapshot, prefs, recommendationNow)?.provider, 'claude');
+  assert.equal(smartNotchFocus(snapshot, usagePreferences({}), recommendationNow), null);
+});
+
+test('formatInlinePacing formats depletion and steady states concisely', () => {
+  const now = 1_000_000;
+  assert.equal(formatInlinePacing(undefined, now), null);
+  assert.deepEqual(formatInlinePacing({ percentagePointsPerHour: 1.2, estimatedExhaustsAt: null, mayRunOutBeforeReset: false, sampleCount: 3 }, now), { label: 'Pace steady until reset', rateLabel: '1.2%/h', attention: false });
+  assert.deepEqual(formatInlinePacing({ percentagePointsPerHour: 18, estimatedExhaustsAt: 1000 + 3600, mayRunOutBeforeReset: true, sampleCount: 4 }, now), { label: 'May run out in 1h 0m', rateLabel: '18%/h', attention: true });
 });
