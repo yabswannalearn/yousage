@@ -41,7 +41,8 @@ await page.addInitScript(() => {
       if (command === 'get_snapshot') return structuredClone(snapshot);
       if (command === 'set_expanded') { document.getElementById('app').style.height = `${args.expanded ? args.height : 80}px`; return { upward: false, height: args.expanded ? args.height : 80 }; }
       if (command === 'get_usage_history') {
-        const result = { series: bridge.cleared ? [] : [{ ...structuredClone(series), label: `${series.label} ${args.rangeHours === 24 ? 'day' : 'week'}` }], retentionDays: snapshot.settings.historyRetentionDays, recordingSince: now - 7200 };
+        const peer = { ...structuredClone(series), id: 'series-2', accountId: 'second', label: 'Personal writing', samples: [{ at: now - 3600, remaining: 92, resetsAt: now + 7200 }, { at: now - 300, remaining: 84, resetsAt: now + 7200 }], pacing: null };
+        const result = { series: bridge.cleared ? [] : [{ ...structuredClone(series), label: `${series.label} ${args.rangeHours === 24 ? 'day' : 'week'}` }, peer], retentionDays: snapshot.settings.historyRetentionDays, recordingSince: now - 7200 };
         if (bridge.delayHistory) await new Promise(resolve => bridge.pendingHistory.push({ range: args.rangeHours, release: () => resolve() }));
         return result;
       }
@@ -65,6 +66,10 @@ try {
   assert.match(await page.locator('.pacing-summary').innerText(), /Approximate.*12 percentage points\/hour over 1 hours/);
   assert.equal(await page.locator('.history-line').count(), 2, 'gaps and allowance resets must remain separate segments');
   assert.equal(await page.locator('.history-point').count(), 5);
+  await page.locator('[data-action="toggle-history-compare"]').click();
+  assert.equal(await page.locator('.history-line-compare').count(), 1, 'comparison mode overlays peer series from the same usage window');
+  assert.equal(await page.locator('.history-legend .legend-item').count(), 2);
+  await page.locator('[data-action="toggle-history-compare"]').click();
   assert.match(await page.locator('.history-point title').first().textContent(), /80% remaining/);
   assert.match(await page.locator('.history-chart desc').textContent(), /actual sample time/);
   await page.evaluate(() => { window.testBridge.delayHistory = true; });

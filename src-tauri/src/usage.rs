@@ -63,6 +63,8 @@ impl Default for AlertRules {
 pub struct UsagePreferences {
     pub notch_providers: Vec<String>,
     pub notch_window: NotchWindow,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub smart_notch: bool,
     pub alert_rules: AlertRules,
     pub account_preferences: HashMap<String, AccountPreference>,
     pub recommendation_purpose: Purpose,

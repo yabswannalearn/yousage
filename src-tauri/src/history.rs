@@ -270,6 +270,20 @@ impl HistoryStore {
         UsageHistory { series, retention_days: snapshot.settings.history_retention_days,
             recording_since: self.series.iter().flat_map(|series| series.samples.first().map(|sample| sample.at)).min() }
     }
+
+    pub fn pacing_map(&self, snapshot: &Snapshot, now: i64) -> HashMap<String, PacingEstimate> {
+        let current = readings(&snapshot.accounts, &snapshot.antigravity, &snapshot.claude);
+        let mut out = HashMap::new();
+        for stored in &self.series {
+            let Some(owner) = current.iter().find(|r| r.provider == stored.provider && r.account_key == stored.account_key && r.group_id == stored.group_id.as_deref() && r.window == stored.window) else { continue; };
+            if !owner.successful || !stored.samples.last().is_some_and(|last| last.resets_at == owner.usage.resets_at && owner.usage.remaining <= last.remaining + 0.001) { continue; }
+            if let Some(estimate) = pacing(&stored.samples, now) {
+                let key = format!("{}:{}:{}:{}", stored.provider.key(), owner.account_id, stored.group_id.as_deref().unwrap_or_default(), stored.window.key());
+                out.insert(key, estimate);
+            }
+        }
+        out
+    }
 }
 
 pub fn pacing(samples: &[HistorySample], now: i64) -> Option<PacingEstimate> {
@@ -362,7 +376,7 @@ mod tests {
         Snapshot { accounts, active_account_id: Some("desktop".into()), antigravity: AntigravityStatus::default(), claude: ClaudeStatus::default(), alerts: vec![],
             update: UpdateStatus::default(), refreshing: false, desktop_error: None, login: None, switching: None, health: Health::default(),
             settings: Settings { start_with_windows: false, refresh_seconds: 60, notch_source: "codex".into(), notifications_enabled: true, provider_colors: ProviderColors::default(),
-                hidden_providers: vec![], app_theme: AppTheme::default(), usage_preferences: UsagePreferences::default(), privacy_mode: false, history_retention_days: 30 } }
+                hidden_providers: vec![], app_theme: AppTheme::default(), usage_preferences: UsagePreferences::default(), privacy_mode: false, history_retention_days: 30 }, pacing: HashMap::new() }
     }
 
     fn sample(at: i64, remaining: f64, resets_at: Option<i64>) -> HistorySample { HistorySample { at, remaining, resets_at } }

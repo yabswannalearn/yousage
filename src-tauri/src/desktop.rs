@@ -197,13 +197,18 @@ fn spawn_global_hotkey(app: AppHandle) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
         let notch_registered = RegisterHotKey(std::ptr::null_mut(), 1, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 0x55) != 0;
         let privacy_registered = RegisterHotKey(std::ptr::null_mut(), 2, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 0x50) != 0;
-        if !notch_registered && !privacy_registered { return; }
+        let cycle_registered = RegisterHotKey(std::ptr::null_mut(), 3, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 0x4E) != 0;
+        if !notch_registered && !privacy_registered && !cycle_registered { return; }
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             if msg.message == WM_HOTKEY {
                 if msg.wParam == 2 {
                     let private = app.state::<AppState>().config.lock().unwrap().privacy_mode;
                     let _ = state::set_privacy_mode(app.clone(), !private);
+                    continue;
+                }
+                if msg.wParam == 3 {
+                    let _ = app.emit("hotkey-cycle-notch", ());
                     continue;
                 }
                 let hidden = app.state::<AppState>().config.lock().unwrap().hidden;
@@ -221,17 +226,22 @@ fn spawn_global_hotkey(app: AppHandle) {
 
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItem::with_id(app, "show", "Show notch (Alt+Shift+U)", true, None::<&str>)?;
+    let cycle_item = MenuItem::with_id(app, "cycle-notch", "Cycle notch preview (Alt+Shift+N)", true, None::<&str>)?;
+    let switch_item = MenuItem::with_id(app, "review-switch", "Review account switch…", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide notch", true, None::<&str>)?;
     let refresh_item = MenuItem::with_id(app, "refresh", "Refresh usage", true, None::<&str>)?;
     let privacy_item = MenuItem::with_id(app, "privacy", "Toggle privacy mode (Alt+Shift+P)", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit YouSage", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &hide_item, &refresh_item, &privacy_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &cycle_item, &switch_item, &hide_item, &refresh_item, &privacy_item, &quit_item])?;
     let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex & Antigravity usage (Alt+Shift+U)").menu(&menu).show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { show(tray.app_handle()); }
         })
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show(app), "hide" => hide_notch(app.clone()),
+            "show" => show(app),
+            "cycle-notch" => { let _ = app.emit("hotkey-cycle-notch", ()); },
+            "review-switch" => { show(app); let _ = app.emit("tray-review-switch", ()); },
+            "hide" => hide_notch(app.clone()),
             "refresh" => { tauri::async_runtime::spawn(state::refresh_all(app.clone())); },
             "privacy" => {
                 let private = app.state::<AppState>().config.lock().unwrap().privacy_mode;
