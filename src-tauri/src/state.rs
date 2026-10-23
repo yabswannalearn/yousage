@@ -5,7 +5,6 @@ use std::{fs, path::PathBuf, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, M
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_notification::NotificationExt;
 use tokio::time::{timeout, Duration, Instant};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -28,6 +27,8 @@ pub struct Config {
     pub hidden_providers: Vec<String>,
     pub app_theme: AppTheme,
     pub usage_preferences: UsagePreferences,
+    pub privacy_mode: bool,
+    pub history_retention_days: u16,
 }
 
 impl Default for Config {
@@ -47,6 +48,8 @@ impl Default for Config {
             hidden_providers: vec![],
             app_theme: AppTheme::default(),
             usage_preferences: UsagePreferences::default(),
+            privacy_mode: false,
+            history_retention_days: 30,
         }
     }
 }
@@ -62,6 +65,8 @@ pub struct Settings {
     pub hidden_providers: Vec<String>,
     pub app_theme: AppTheme,
     pub usage_preferences: UsagePreferences,
+    pub privacy_mode: bool,
+    pub history_retention_days: u16,
 }
 
 #[derive(Clone, Serialize)]
@@ -88,6 +93,7 @@ pub struct AppState {
     pub config: Mutex<Config>,
     pub snapshot: Mutex<Snapshot>,
     pub alert_history: Mutex<AlertHistory>,
+    pub usage_history: Mutex<crate::history::HistoryStore>,
     pub directory: PathBuf,
     persist_guard: Mutex<()>,
     pub io: tokio::sync::Mutex<()>,
@@ -112,6 +118,7 @@ impl AppState {
         if !config.app_theme.valid() { config.app_theme = AppTheme::default(); }
         if !config.provider_colors.valid() { config.provider_colors = ProviderColors::default(); }
         if config.usage_preferences.validate().is_err() { config.usage_preferences = UsagePreferences::default(); }
+        if !crate::history::valid_retention(config.history_retention_days) { config.history_retention_days = 30; }
         let mut cached: Vec<Account> = fs::read(directory.join("usage-cache.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         cached.retain(|a| a.desktop || config.profiles.iter().any(|p| p.id == a.id));
         for account in &mut cached { account.error = Some("Checking latest usage…".into()); }
@@ -132,6 +139,7 @@ impl AppState {
         }
         let claude_next_refresh = health.claude.next_retry_at.unwrap_or_default().max(0) as u64;
         let alert_history = load_alert_history(&directory);
+        let usage_history = crate::history::HistoryStore::load(&directory, config.history_retention_days, now());
         let snapshot = Snapshot {
             accounts: cached,
             active_account_id: None,
@@ -152,11 +160,13 @@ impl AppState {
                 hidden_providers: config.hidden_providers.clone(),
                 app_theme: config.app_theme.clone(),
                 usage_preferences: config.usage_preferences.clone(),
+                privacy_mode: config.privacy_mode,
+                history_retention_days: config.history_retention_days,
             },
             health,
         };
         Ok(Self {
-            config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(alert_history), directory, persist_guard: Mutex::new(()),
+            config: Mutex::new(config), snapshot: Mutex::new(snapshot), alert_history: Mutex::new(alert_history), usage_history: Mutex::new(usage_history), directory, persist_guard: Mutex::new(()),
             io: tokio::sync::Mutex::new(()), login_running: AtomicBool::new(false), switch_running: AtomicBool::new(false), cancel_login: AtomicBool::new(false),
             resizing: AtomicBool::new(false), resize_generation: AtomicU64::new(0), window: Mutex::new(crate::desktop::WindowState::default()),
             claude_next_refresh: AtomicU64::new(claude_next_refresh),
@@ -178,7 +188,41 @@ impl AppState {
         let health = serde_json::to_vec(&snapshot.health).map_err(|_| "Could not save provider health.")?;
         atomic_write(&self.directory.join("health-cache.json"), &health)?;
         let history = serde_json::to_vec(&*self.alert_history.lock().unwrap()).map_err(|_| "Could not save alert state.")?;
-        atomic_write(&self.directory.join("alert-state.json"), &history)
+        atomic_write(&self.directory.join("alert-state.json"), &history)?;
+        let mut history = self.usage_history.lock().unwrap();
+        if history.is_dirty() {
+            let bytes = serde_json::to_vec(&*history).map_err(|_| "Could not save usage history.")?;
+            atomic_write(&self.directory.join("usage-history.json"), &bytes)?;
+            history.mark_saved();
+        }
+        Ok(())
+    }
+
+    pub fn save_history_change(&self, mut next: crate::history::HistoryStore) -> Result<(), String> {
+        let _guard = self.persist_guard.lock().unwrap();
+        let mut history = self.usage_history.lock().unwrap();
+        let bytes = serde_json::to_vec(&next).map_err(|_| "Could not save usage history.")?;
+        atomic_write(&self.directory.join("usage-history.json"), &bytes)?;
+        next.mark_saved();
+        *history = next;
+        Ok(())
+    }
+
+    pub fn save_history_retention(&self, days: u16) -> Result<(), String> {
+        let _guard = self.persist_guard.lock().unwrap();
+        let mut config = self.config.lock().unwrap();
+        let mut next_config = config.clone();
+        next_config.history_retention_days = days;
+        let bytes = serde_json::to_vec_pretty(&next_config).map_err(|_| "Could not save history settings.")?;
+        atomic_write(&self.directory.join("settings.json"), &bytes)?;
+        *config = next_config;
+        self.snapshot.lock().unwrap().settings.history_retention_days = days;
+        let mut history = self.usage_history.lock().unwrap();
+        history.prune(days, now());
+        let bytes = serde_json::to_vec(&*history).map_err(|_| "Could not save usage history.")?;
+        atomic_write(&self.directory.join("usage-history.json"), &bytes)?;
+        history.mark_saved();
+        Ok(())
     }
 
     pub fn emit(&self, app: &AppHandle) {
@@ -278,11 +322,13 @@ pub async fn refresh_all(app: AppHandle) {
         // Deliver from the backend even while the webview/notch is hidden.
         // Windows notification settings remain authoritative; in-app alerts
         // are retained if the OS refuses a toast.
-        if let Err(error) = app.notification().builder().title(&alert.title).body(&alert.message).show() {
+        if let Err(error) = crate::notifications::send_alert(&app, &alert) {
             eprintln!("Could not show a usage notification: {error}");
         }
         let _ = app.emit("usage-alert", alert);
     }
+    let snapshot = state.snapshot.lock().unwrap().clone();
+    state.usage_history.lock().unwrap().capture(&snapshot, now());
     state.emit(&app);
     let _ = state.persist();
 }
@@ -516,13 +562,17 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { state.snapshot.loc
 pub fn refresh_usage(app: AppHandle) { tauri::async_runtime::spawn(refresh_all(app)); }
 
 #[tauri::command]
-pub fn test_notification(app: AppHandle) -> Result<(), String> {
+pub fn test_notification(app: AppHandle) -> Result<crate::notifications::NotificationStatus, String> {
     if !app.state::<AppState>().config.lock().unwrap().notifications_enabled {
         return Err("Enable notifications before sending a test.".into())
     }
-    app.notification().builder().title("YouSage notifications")
-        .body("Low-allowance and reset alerts will appear here, even while YouSage is hidden.")
-        .show().map_err(|_| "Windows could not show the notification. Check YouSage in Windows notification settings.".into())
+    crate::notifications::send(&app, "YouSage notifications", "Native notification test. Windows may show a banner or keep this in Notification Center.")
+}
+
+#[tauri::command]
+pub fn open_notification_settings(app: AppHandle) -> Result<(), String> {
+    app.opener().open_url("ms-settings:notifications", None::<&str>)
+        .map_err(|_| "Could not open Windows notification settings.".into())
 }
 
 #[tauri::command]
@@ -830,6 +880,26 @@ fn save_usage_preferences(directory: &std::path::Path, config: &mut Config, pref
 }
 
 #[tauri::command]
+pub fn set_privacy_mode(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    {
+        let _guard = state.persist_guard.lock().unwrap();
+        let mut config = state.config.lock().unwrap();
+        let mut next = config.clone();
+        next.privacy_mode = enabled;
+        let bytes = serde_json::to_vec_pretty(&next).map_err(|_| "Could not save privacy settings.")?;
+        atomic_write(&state.directory.join("settings.json"), &bytes)?;
+        *config = next;
+        state.snapshot.lock().unwrap().settings.privacy_mode = enabled;
+    }
+    if enabled {
+        if let Err(error) = crate::notifications::clear_notification_history(&app) { eprintln!("Could not clear previous usage notifications: {error}"); }
+    }
+    state.emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn update_usage_preferences(app: AppHandle, preferences: UsagePreferences) -> Result<(), String> {
     let state = app.state::<AppState>();
     {
@@ -905,6 +975,8 @@ mod tests {
         assert_eq!(config.provider_colors, ProviderColors::default());
         assert_eq!(config.app_theme, AppTheme::default());
         assert_eq!(config.usage_preferences, UsagePreferences::default());
+        assert!(!config.privacy_mode);
+        assert_eq!(config.history_retention_days, 30);
     }
 
     #[test]

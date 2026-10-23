@@ -26,6 +26,9 @@
 - Alert controls include per-provider warning/critical thresholds, separate low/reset switches, snooze, and local quiet hours. Save notification deduplication across restarts and advance it during suppression so old alerts are not delivered afterward.
 - Connection health reports actual last success, next check or eligible retry, and recovery instructions while retaining the age of cached usage.
 - Explain account recommendations for Codex and matching Antigravity model groups using fresh data, capacity and reset timing. Let people set work/personal purposes and exclude accounts from suggestions.
+- Show locally saved 24-hour and seven-day history, with approximate pacing from sufficient recent observations in the same reset window. Reject stale, failed, sparse, or discontinuous data. Provide local retention, clear, and CSV export controls.
+- Privacy mode masks account names and emails in the interface, history exports, and native alerts while preserving sign-ins. A global shortcut, footer, settings, and tray control can toggle it.
+- Native notification status distinguishes Windows delivery availability and API failures from whether a banner appeared. Portable builds register YouSage's Start Menu app identity, and Windows banner/Do not disturb preferences remain authoritative.
 - Dragging an expanded notch preserves the visible detail panel throughout the gesture and does not treat the release as a toggle click.
 
 ## Account switching
