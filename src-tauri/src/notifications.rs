@@ -22,12 +22,20 @@ struct Diagnostics { last_attempt_at: Option<i64>, last_error: Option<String>, i
 
 fn diagnostics() -> &'static Mutex<Diagnostics> {
     static STATE: OnceLock<Mutex<Diagnostics>> = OnceLock::new();
-    STATE.get_or_init(Mutex::default)
+    STATE.get_or_init(|| Mutex::new(Diagnostics {
+        attempt: (crate::state::now().max(1) as u64).saturating_mul(1000),
+        ..Diagnostics::default()
+    }))
 }
 
 fn delivery_gate() -> &'static Mutex<()> {
     static GATE: Mutex<()> = Mutex::new(());
     &GATE
+}
+
+pub fn set_process_identity() {
+    #[cfg(windows)]
+    native::set_process_identity();
 }
 
 pub fn initialize(app: &AppHandle) -> Result<(), String> {
@@ -118,15 +126,26 @@ mod native {
         core::{HSTRING, Interface, PCWSTR, IInspectable},
         Data::Xml::Dom::XmlDocument,
         Foundation::TypedEventHandler,
-        UI::Notifications::{NotificationSetting, ToastFailedEventArgs, ToastNotification, ToastNotificationManager},
+        UI::Notifications::{NotificationSetting, ToastFailedEventArgs, ToastNotification, ToastNotificationManager, ToastNotificationPriority},
         Win32::{Storage::EnhancedStorage::PKEY_AppUserModel_ID, System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, StructuredStorage::PROPVARIANT}, UI::Shell::{IShellLinkW, PropertiesSystem::IPropertyStore, SetCurrentProcessExplicitAppUserModelID, ShellLink, SHQueryUserNotificationState, QUNS_ACCEPTS_NOTIFICATIONS}},
     };
+
+    const ICON_PNG: &[u8] = include_bytes!("../icons/128x128.png");
 
     struct Apartment(bool);
     impl Apartment {
         fn new() -> Self { Self(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() }) }
     }
     impl Drop for Apartment { fn drop(&mut self) { if self.0 { unsafe { CoUninitialize(); } } } }
+
+    fn default_identity() -> &'static str {
+        if cfg!(debug_assertions) { "com.yousage.desktop.dev" } else { "com.yousage.desktop" }
+    }
+
+    pub(super) fn set_process_identity() {
+        let app_id = HSTRING::from(default_identity());
+        unsafe { let _ = SetCurrentProcessExplicitAppUserModelID(&app_id); }
+    }
 
     fn identity(app: &AppHandle) -> String {
         if cfg!(debug_assertions) { format!("{}.dev", app.config().identifier) } else { app.config().identifier.clone() }
@@ -147,8 +166,23 @@ mod native {
             .map_err(|error| format!("Could not register YouSage with Windows notifications ({error})."))
     }
 
+    fn ensure_icon_file(executable: &Path) -> PathBuf {
+        let dir = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .map(|base| base.join("com.yousage.desktop"))
+            .or_else(|| executable.parent().map(Path::to_path_buf))
+            .unwrap_or_else(std::env::temp_dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let icon_path = dir.join("notification-icon.png");
+        if std::fs::read(&icon_path).ok().as_deref() != Some(ICON_PNG) {
+            let _ = std::fs::write(&icon_path, ICON_PNG);
+        }
+        icon_path
+    }
+
     fn register_shortcut(shortcut: &Path, executable: &Path, app_id: &str) -> windows::core::Result<()> {
-        register_identity(app_id, executable)?;
+        let icon_path = ensure_icon_file(executable);
+        register_identity(app_id, &icon_path)?;
         let _apartment = Apartment::new();
         let target = wide(executable.as_os_str());
         let shortcut_path = wide(shortcut.as_os_str());
@@ -157,10 +191,18 @@ mod native {
             SetCurrentProcessExplicitAppUserModelID(&app_id_wide)?;
             let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
             let file: IPersistFile = link.cast()?;
-            // Preserve a valid installer-created shortcut, including its target.
+            // Preserve a valid shortcut only when its AppUserModelID and target path still match.
             if shortcut.is_file() && file.Load(PCWSTR(shortcut_path.as_ptr()), windows::Win32::System::Com::STGM_READ).is_ok() {
                 let properties: IPropertyStore = link.cast()?;
-                if properties.GetValue(&PKEY_AppUserModel_ID).ok().is_some_and(|value| value.to_string() == app_id) { return Ok(()); }
+                let mut existing_target = [0u16; 260];
+                let target_matches = link.GetPath(&mut existing_target, std::ptr::null_mut(), 0).is_ok() && {
+                    let len = existing_target.iter().position(|&c| c == 0).unwrap_or(existing_target.len());
+                    let existing = PathBuf::from(String::from_utf16_lossy(&existing_target[..len]));
+                    existing == executable && existing.is_file()
+                };
+                if target_matches && properties.GetValue(&PKEY_AppUserModel_ID).ok().is_some_and(|value| value.to_string() == app_id) {
+                    return Ok(());
+                }
             }
             link.SetPath(PCWSTR(target.as_ptr()))?;
             link.SetArguments(windows::core::w!(""))?;
@@ -175,7 +217,7 @@ mod native {
         Ok(())
     }
 
-    fn register_identity(app_id: &str, executable: &Path) -> windows::core::Result<()> {
+    fn register_identity(app_id: &str, icon_path: &Path) -> windows::core::Result<()> {
         use windows_sys::Win32::System::Registry::*;
         let path = wide(std::ffi::OsStr::new(&format!("Software\\Classes\\AppUserModelId\\{app_id}")));
         let mut key = std::ptr::null_mut();
@@ -187,7 +229,7 @@ mod native {
             unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, value.as_ptr().cast(), (value.len() * 2) as u32) }
         };
         let display = write("DisplayName", std::ffi::OsStr::new("YouSage"));
-        let icon = write("IconUri", executable.as_os_str());
+        let icon = write("IconUri", icon_path.as_os_str());
         unsafe { RegCloseKey(key); }
         let result = if display != 0 { display } else { icon };
         if result != 0 { return Err(windows::core::Error::from_hresult(windows::core::HRESULT::from_win32(result))); }
@@ -231,11 +273,14 @@ mod native {
     fn show_with_id(app_id: &str, title: &str, body: &str, attempt: u64, app: Option<AppHandle>) -> windows::core::Result<()> {
         let xml = XmlDocument::new()?;
         // SetInnerText escapes user-provided names, rather than interpolating XML.
-        xml.LoadXml(windows::core::h!("<toast><visual><binding template=\"ToastGeneric\"><text/><text/></binding></visual></toast>"))?;
+        // Reminder scenario with a native system dismiss action allows Windows 11
+        // to surface the banner even when Priority Only / Game Mode Do Not Disturb is active.
+        xml.LoadXml(windows::core::h!("<toast scenario=\"reminder\"><visual><binding template=\"ToastGeneric\"><text/><text/></binding></visual><actions><action content=\"\" arguments=\"dismiss\" activationType=\"system\"/></actions></toast>"))?;
         let texts = xml.GetElementsByTagName(windows::core::h!("text"))?;
         texts.Item(0)?.SetInnerText(&HSTRING::from(title))?;
         texts.Item(1)?.SetInnerText(&HSTRING::from(body))?;
         let toast = ToastNotification::CreateToastNotification(&xml)?;
+        let _ = toast.SetPriority(ToastNotificationPriority::High);
         toast.SetGroup(windows::core::h!("yousage"))?;
         toast.SetTag(&HSTRING::from(format!("alert-{attempt}")))?;
         toast.Failed(&TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(move |_, args| {

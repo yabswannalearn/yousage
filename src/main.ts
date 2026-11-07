@@ -181,6 +181,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     snapshot.settings.usagePreferences = args?.preferences as UsagePreferences;
   } else if (command === 'dismiss_alert') {
     snapshot.alerts = snapshot.alerts.filter(a => a.id !== args?.id);
+  } else if (command === 'clear_alerts') {
+    snapshot.alerts = [];
   } else if (command === 'save_antigravity_account') {
     const list = snapshot.antigravity.accounts ?? [];
     list.push({ id: `agy-${Date.now()}`, label: String(args?.label ?? 'Antigravity'), email: snapshot.antigravity.email, groups: snapshot.antigravity.groups, updatedAt: snapshot.antigravity.updatedAt, error: null, active: true });
@@ -485,8 +487,12 @@ function alertsBanner() {
     const url = esc(snapshot.update.installerUrl ?? snapshot.update.releaseUrl ?? 'https://github.com/yabswannalearn/yousage/releases/latest');
     parts.push(`<div class="suggest-banner update-banner" role="status"><div class="suggest-copy"><strong>Update available · v${esc(snapshot.update.latestVersion)}</strong><span>Download the latest Windows Setup Wizard installer.</span></div><button type="button" class="subtle-button" data-action="open-release" data-url="${url}">Download</button></div>`);
   }
-  for (const alert of snapshot.alerts.filter(alert => !(snapshot.settings.hiddenProviders ?? []).some(provider => alert.id.startsWith(`${provider === 'antigravity' ? 'agy' : provider}:`)))) {
-    parts.push(`<div class="alert-banner ${alert.kind === 'reset' ? 'reset' : 'low'}" role="status"><div class="suggest-copy"><strong>${esc(alert.title)}</strong><span>${esc(alert.message)}</span></div>${iconButton('dismiss-alert', 'x', 'Dismiss alert', `data-id="${esc(alert.id)}"`)}</div>`);
+  const visibleAlerts = snapshot.alerts.filter(alert => !(snapshot.settings.hiddenProviders ?? []).some(provider => alert.id.startsWith(`${provider === 'antigravity' ? 'agy' : provider}:`)));
+  if (visibleAlerts.length) {
+    parts.push(`<div class="alerts-header"><span class="eyebrow">NOTIFICATIONS (${visibleAlerts.length})</span><button type="button" class="text-button" data-action="clear-alerts">Clear all</button></div>`);
+    for (const alert of visibleAlerts) {
+      parts.push(`<div class="alert-banner ${alert.kind === 'reset' ? 'reset' : 'low'}" role="status"><div class="suggest-copy"><strong>${esc(alert.title)}</strong><span>${esc(alert.message)}</span></div>${iconButton('dismiss-alert', 'x', 'Dismiss alert', `data-id="${esc(alert.id)}"`)}</div>`);
+    }
   }
   const prefs = preferences();
   const suggestions = [
@@ -862,6 +868,7 @@ root.addEventListener('click', event => {
       else void attempt(async () => { await call('disconnect_antigravity_account', { id }); managingAgy = null; disconnectAgyConfirmation = null; });
       break;
     case 'dismiss-alert': if (id) void attempt(() => call('dismiss_alert', { id })); break;
+    case 'clear-alerts': void attempt(() => call('clear_alerts')); break;
     case 'test-notification': void attempt(async () => {
       notice = '';
       try {
