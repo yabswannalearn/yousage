@@ -55,6 +55,14 @@ await page.addInitScript(() => {
         snapshot.settings.usagePreferences = args.preferences;
         window.testBridge.emit('usage-updated', snapshot);
       }
+      if (command === 'dismiss_alert') {
+        snapshot.alerts = snapshot.alerts.filter(a => a.id !== args.id);
+        window.testBridge.emit('usage-updated', snapshot);
+      }
+      if (command === 'clear_alerts') {
+        snapshot.alerts = [];
+        window.testBridge.emit('usage-updated', snapshot);
+      }
     },
   };
 });
@@ -352,6 +360,18 @@ try {
   assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 0);
   await page.locator('[data-action="filter-provider"][data-provider="all"]').click();
   assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 1);
+  await page.evaluate(() => {
+    window.testBridge.snapshot.alerts = [
+      { id: 'codex:demo:5h:low', title: 'Codex (Personal) · 5-hour low', message: 'Codex has 18% remaining.', kind: 'low' },
+      { id: 'agy:demo:gemini:5h:reset', title: 'Antigravity (Gemini Models) · 5-hour refilled', message: 'Antigravity reset (100% remaining).', kind: 'reset' },
+    ];
+    window.testBridge.emit('usage-updated', window.testBridge.snapshot);
+  });
+  assert.equal(await page.locator('.alert-banner').count(), 2);
+  assert.equal(await page.locator('[data-action="clear-alerts"]').isVisible(), true);
+  await page.locator('[data-action="clear-alerts"]').click();
+  assert.equal(await page.locator('.alert-banner').count(), 0);
+  assert.equal(await page.locator('[data-action="clear-alerts"]').count(), 0);
   await page.evaluate(() => window.testBridge.emit('hotkey-cycle-notch'));
   await page.waitForFunction(() => window.testBridge.snapshot.settings.notchSource !== 'codex');
   assert.deepEqual(failures, []);

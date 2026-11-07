@@ -592,6 +592,14 @@ pub fn dismiss_alert(app: AppHandle, id: String) {
 }
 
 #[tauri::command]
+pub fn clear_alerts(app: AppHandle) {
+    let state = app.state::<AppState>();
+    state.snapshot.lock().unwrap().alerts.clear();
+    let _ = crate::notifications::clear_notification_history(&app);
+    state.emit(&app);
+}
+
+#[tauri::command]
 pub async fn save_antigravity_account(app: AppHandle, label: String) -> Result<(), String> {
     let label: String = label.trim().chars().take(48).collect();
     if label.is_empty() { return Err("Enter a name for this Antigravity account.".into()) }
