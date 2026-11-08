@@ -21,7 +21,8 @@ try {
     assert.equal(await header.evaluate(el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth), true, `${edge} compact content must fit`);
     await page.screenshot({ path: `artifacts/docking/${edge}-compact.png` });
     await root.screenshot({ path: `artifacts/docking/${edge}-notch.png` });
-    await header.click();
+    await header.evaluate(el => el.focus());
+    await page.keyboard.press('Enter');
     await page.waitForTimeout(470);
     assert.equal(await header.getAttribute('aria-expanded'), 'true');
     assert.equal(Math.round((await root.boundingBox()).width), ['top', 'bottom'].includes(edge) ? 480 : 440);
@@ -36,7 +37,8 @@ try {
     await page.goto(`http://127.0.0.1:1420/?preview=1&edge=${edge}`);
     const root = page.locator('#app');
     const header = page.locator('#notch-toggle');
-    await header.click();
+    await header.evaluate(el => el.focus());
+    await page.keyboard.press('Enter');
     await page.waitForTimeout(470);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     for (const provider of ['codex', 'antigravity', 'claude']) await page.locator(`#preview-${provider}`).check();
@@ -51,14 +53,16 @@ try {
     const overflow = await header.locator('.small-reading').evaluateAll(elements => elements.some(el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1));
     assert.equal(overflow, false, `${edge} three-provider readings must stay within their bounds`);
     await root.screenshot({ path: `artifacts/docking/${edge}-three-providers.png` });
-    await header.click();
+    await header.evaluate(el => el.focus());
+    await page.keyboard.press('Enter');
     await page.waitForTimeout(470);
     assert.equal(await header.locator('svg[role=meter]').count(), 3, `${edge} expansion must preserve provider selection`);
     assert.equal(await page.locator('.panel-scroll').evaluate(el => el.scrollWidth <= el.clientWidth), true, `${edge} custom details must fit`);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('http://127.0.0.1:1420/?preview=1&edge=top');
-  await page.locator('#notch-toggle').click();
+  await page.locator('#notch-toggle').evaluate(el => el.focus());
+  await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#app.expanded:not(.opening)'));
   assert.equal(await page.locator('.shell').evaluate(el => el.getAnimations().length), 0, 'reduced motion must skip shell animation');
   await page.keyboard.press('Escape');

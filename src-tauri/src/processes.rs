@@ -16,7 +16,7 @@ struct Process {
 
 pub struct Desktop { executable: PathBuf }
 #[derive(Clone, Copy)]
-pub enum Provider { Codex, Antigravity }
+pub enum Provider { Codex, Antigravity, Claude }
 pub struct Runtime {
     pub desktop: Vec<Desktop>,
     pub cli_running: bool,
@@ -63,6 +63,7 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
     let desktop_ids: HashSet<u32> = processes.iter().filter(|p| p.executable_path.as_ref().is_some_and(|path| desktop_paths.contains(path)) || match provider {
         Provider::Codex => p.name.eq_ignore_ascii_case("ChatGPT.exe"),
         Provider::Antigravity => p.name.eq_ignore_ascii_case("Antigravity.exe"),
+        Provider::Claude => false, // Claude desktop has a separate sign-in from Claude Code.
     }).map(|p| p.process_id).collect();
     let by_id: HashMap<_, _> = processes.iter().map(|p| (p.process_id, p)).collect();
     // Windows can recycle the PID of an exited parent. A newer process with
@@ -100,6 +101,7 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
     let is_cli = |p: &&Process| match provider {
         Provider::Codex => p.name.eq_ignore_ascii_case("codex.exe") && !desktop_ids.contains(&p.process_id),
         Provider::Antigravity => p.name.eq_ignore_ascii_case("agy.exe"),
+        Provider::Claude => (p.name.eq_ignore_ascii_case("claude.exe") && p.executable_path.as_ref().is_none_or(|path| !is_desktop(path))) || is_cli_shim(p, Provider::Claude),
     };
     let cli_running = processes.iter().any(|p| {
         if !is_cli(&p) || owned(p.process_id) { return false }
@@ -151,10 +153,14 @@ fn is_shell(name: &str) -> bool {
 
 fn is_cli_shim(process: &Process, provider: Provider) -> bool {
     if !process.name.eq_ignore_ascii_case("node.exe") { return false }
-    matches!(provider, Provider::Codex) && process.command_line.as_deref().is_some_and(|line| {
+    process.command_line.as_deref().is_some_and(|line| {
         arguments(line).iter().skip(1).any(|arg| {
             let path = arg.replace('\\', "/").to_ascii_lowercase();
-            path.contains("/@openai/codex/") && path.ends_with("/codex.js")
+            match provider {
+                Provider::Codex => path.contains("/@openai/codex/") && path.ends_with("/codex.js"),
+                Provider::Claude => path.contains("/@anthropic-ai/claude-code/") && path.ends_with("/cli.js"),
+                Provider::Antigravity => false,
+            }
         })
     })
 }
@@ -178,6 +184,7 @@ pub async fn inspect(provider: Provider) -> Result<Runtime, String> {
     let paths = processes.iter().filter(|p| match provider {
         Provider::Codex => p.name.eq_ignore_ascii_case("ChatGPT.exe") || (p.name.eq_ignore_ascii_case("Codex.exe") && p.executable_path.as_ref().is_some_and(|path| is_desktop(path))),
         Provider::Antigravity => p.name.eq_ignore_ascii_case("Antigravity.exe"),
+        Provider::Claude => false,
     }).filter_map(|p| p.executable_path.clone()).collect();
     Ok(classify(&processes, std::process::id(), &paths, provider))
 }
@@ -250,6 +257,15 @@ fn store_app_target(executable: &Path) -> Option<String> {
 mod tests {
     use super::*;
     fn process(pid: u32, parent: u32, name: &str, args: &str) -> Process { Process { process_id: pid, parent_process_id: parent, name: name.into(), executable_path: Some(PathBuf::from(name)), command_line: Some(args.into()), started: Some("1".into()) } }
+
+    #[test]
+    fn claude_switch_targets_code_and_its_shells_and_ignores_other_node_apps() {
+        let processes = vec![process(1, 0, "explorer.exe", "explorer"), process(10, 1, "pwsh.exe", "pwsh"), process(11, 10, "claude.exe", "claude"), process(20, 1, "pwsh.exe", "pwsh"), process(21, 20, "node.exe", r#"node "C:\npm\node_modules\@anthropic-ai\claude-code\cli.js""#), process(30, 1, "node.exe", "node unrelated.js"), process(40, 50, "claude.exe", "internal helper")];
+        let runtime = classify(&processes, 50, &HashSet::new(), Provider::Claude);
+        let mut targets: Vec<_> = runtime.targets.iter().map(|process| process.process_id).collect(); targets.sort();
+        assert_eq!(targets, vec![10,20]);
+        assert!(runtime.cli_running); assert!(runtime.desktop.is_empty());
+    }
 
     #[test]
     fn only_owned_engine_processes_are_safe_to_restart() {

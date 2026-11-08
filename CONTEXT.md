@@ -86,3 +86,15 @@ _Avoid_: Open notch, dashboard
 
 **Developer**: Which sign-in determines the active Codex account?
 **User**: The Codex desktop app's sign-in, even if the terminal or editor uses another account.
+
+**Coding session**:
+A local Codex, Claude Code, or Antigravity conversation reported by the provider's hooks or live status. Its state is **Rest**, **Working**, **Needs permission**, or **Finished**. The compact header prioritizes a working conversation, includes its provider logo, and shows `+N` for additional sessions; the detail panel lists them. Session state is independent of subscription allowance and respects subscription visibility and privacy mode.
+
+**Pinned detail panel**:
+A detail panel kept open by clicking inside it after hovering to expand. Moving away preserves a pinned panel. Clicking outside or pressing Escape minimizes it. A still pointer never triggers automatic minimization.
+
+**Fable allowance**:
+Claude's separate model-specific weekly usage window, shown only when reported by the Claude subscription. It has its own remaining percentage and reset time and can be selected for the notch.
+
+**Auto switch account**:
+An opt-in setting per subscription that switches to another eligible saved account when a freshly verified allowance reaches exactly 0% remaining. It compares the same usage windows, respects account purpose and exclusions, and closes affected sessions automatically when enabled. The person can instead choose to wait for sessions to close. Antigravity follows the notch's selected model group; Claude also checks Fable when selected. Missing, stale, failed, or reset-due readings cannot trigger switching.

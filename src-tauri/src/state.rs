@@ -15,6 +15,7 @@ pub struct Profile { pub id: String, pub label: String }
 pub struct Config {
     pub profiles: Vec<Profile>,
     pub antigravity_profiles: Vec<Profile>,
+    pub claude_profiles: Vec<Profile>,
     pub desktop_label: Option<String>,
     pub start_with_windows: bool,
     pub refresh_seconds: u64,
@@ -29,6 +30,7 @@ pub struct Config {
     pub usage_preferences: UsagePreferences,
     pub privacy_mode: bool,
     pub history_retention_days: u16,
+    pub sessions_enabled: bool,
 }
 
 impl Default for Config {
@@ -36,6 +38,7 @@ impl Default for Config {
         Self {
             profiles: vec![],
             antigravity_profiles: vec![],
+            claude_profiles: vec![],
             desktop_label: None,
             start_with_windows: true,
             refresh_seconds: 60,
@@ -50,6 +53,7 @@ impl Default for Config {
             usage_preferences: UsagePreferences::default(),
             privacy_mode: false,
             history_retention_days: 30,
+            sessions_enabled: false,
         }
     }
 }
@@ -67,6 +71,7 @@ pub struct Settings {
     pub usage_preferences: UsagePreferences,
     pub privacy_mode: bool,
     pub history_retention_days: u16,
+    pub sessions_enabled: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -87,6 +92,7 @@ pub struct Snapshot {
     pub switching: Option<String>,
     pub settings: Settings,
     pub health: Health,
+    pub auto_switch: std::collections::HashMap<String, crate::auto_switch::AutoSwitchStatus>,
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub pacing: std::collections::HashMap<String, crate::history::PacingEstimate>,
 }
@@ -114,6 +120,7 @@ impl AppState {
         let directory = app.path().app_local_data_dir()?;
         fs::create_dir_all(directory.join("accounts"))?;
         fs::create_dir_all(directory.join("antigravity-accounts"))?;
+        fs::create_dir_all(directory.join("claude-accounts"))?;
         let mut config: Config = fs::read(directory.join("settings.json")).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_default();
         config.refresh_seconds = config.refresh_seconds.clamp(30, 600);
         if config.notch_source.is_empty() { config.notch_source = "codex".into(); }
@@ -164,8 +171,10 @@ impl AppState {
                 usage_preferences: config.usage_preferences.clone(),
                 privacy_mode: config.privacy_mode,
                 history_retention_days: config.history_retention_days,
+                sessions_enabled: config.sessions_enabled,
             },
             health,
+            auto_switch: fs::read(directory.join("auto-switch-state.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default(),
             pacing: std::collections::HashMap::new(),
         };
         snapshot.pacing = usage_history.pacing_map(&snapshot, now());
@@ -191,6 +200,8 @@ impl AppState {
         atomic_write(&self.directory.join("claude-cache.json"), &claude)?;
         let health = serde_json::to_vec(&snapshot.health).map_err(|_| "Could not save provider health.")?;
         atomic_write(&self.directory.join("health-cache.json"), &health)?;
+        let automatic = serde_json::to_vec(&snapshot.auto_switch).map_err(|_| "Could not save automatic switch status.")?;
+        atomic_write(&self.directory.join("auto-switch-state.json"), &automatic)?;
         let history = serde_json::to_vec(&*self.alert_history.lock().unwrap()).map_err(|_| "Could not save alert state.")?;
         atomic_write(&self.directory.join("alert-state.json"), &history)?;
         let mut history = self.usage_history.lock().unwrap();
@@ -251,9 +262,16 @@ fn load_alert_history(directory: &std::path::Path) -> AlertHistory {
     fs::read(directory.join("alert-state.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
 }
 
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).and_then(|_| fs::rename(&temporary, path)).map_err(|_| "Could not save YouSage data. Check that your user data folder is writable.".into())
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let save = || -> Result<(), Box<dyn std::error::Error>> {
+        let mut temporary = tempfile::Builder::new().prefix(".yousage-").tempfile_in(path.parent().ok_or("Missing data folder")?)?;
+        temporary.write_all(bytes)?;
+        temporary.flush()?;
+        temporary.persist(path)?;
+        Ok(())
+    };
+    save().map_err(|_| "Could not save YouSage data. Check that your user data folder is writable.".into())
 }
 
 pub fn now() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }
@@ -568,7 +586,7 @@ async fn refresh_antigravity(app: &AppHandle) {
 pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot { state.snapshot.lock().unwrap().clone() }
 
 #[tauri::command]
-pub fn refresh_usage(app: AppHandle) { tauri::async_runtime::spawn(refresh_all(app)); }
+pub fn refresh_usage(app: AppHandle) { tauri::async_runtime::spawn(async move { refresh_all(app.clone()).await; crate::auto_switch::run(app).await; }); }
 
 #[tauri::command]
 pub fn test_notification(app: AppHandle) -> Result<crate::notifications::NotificationStatus, String> {
@@ -631,6 +649,10 @@ pub async fn save_antigravity_account(app: AppHandle, label: String) -> Result<(
 
 #[tauri::command]
 pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desktop: bool) -> Result<(), String> {
+    switch_antigravity_with_request(app, id, restart_desktop, None).await
+}
+
+pub async fn switch_antigravity_with_request(app: AppHandle, id: String, restart_desktop: bool, automatic: Option<crate::auto_switch::Request>) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.login_running.load(Ordering::SeqCst) { return Err("Finish or cancel the current sign-in first.".into()) }
     if state.switch_running.swap(true, Ordering::SeqCst) { return Err("An account switch is already running.".into()) }
@@ -642,7 +664,16 @@ pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desk
         }
         let target_home = state.antigravity_profile_home(&id)?;
         // Validate and refresh the target before interrupting any running work.
-        rpc::read_antigravity_in(Some(&target_home)).await?;
+        let (target_email, groups, target_error) = rpc::read_antigravity_in(Some(&target_home)).await?;
+        let (available, restart_desktop) = if let Some(request) = automatic.as_ref() {
+            if target_error.is_some() || target_email.as_ref().is_none_or(|email| email.eq_ignore_ascii_case(&request.identity)) || rpc::antigravity_email().as_deref() != Some(request.identity.as_str()) {
+                return Err("Antigravity's sign-in or target allowance changed. Automatic switching was cancelled.".into());
+            }
+            let group = groups.iter().find(|group| Some(&group.id) == request.group.as_ref()).ok_or("The next account does not have the same Antigravity quota group.")?;
+            let available = crate::auto_switch::windows(group.five_hour.as_ref(), group.weekly.as_ref());
+            let close = crate::auto_switch::authorize(&state, request, &available)?;
+            (available, close)
+        } else { (std::collections::HashMap::new(), restart_desktop) };
         let incoming = rpc::temporary_auth_home()?;
         rpc::copy_antigravity_auth(&target_home, incoming.path())?;
         let runtime = crate::processes::inspect(crate::processes::Provider::Antigravity).await?;
@@ -677,6 +708,7 @@ pub async fn switch_antigravity_account(app: AppHandle, id: String, restart_desk
             if crate::processes::inspect(crate::processes::Provider::Antigravity).await?.running() {
                 return Err("An Antigravity session started during the switch. No sign-in was changed. Review the sessions and retry.".into())
             }
+            if let Some(request) = automatic.as_ref() { crate::auto_switch::authorize(&state, request, &available)?; }
             let replacement = async {
                 rpc::sync_antigravity_auth(&incoming.path().join(".gemini"), &active)?;
                 rpc::read_antigravity().await?;
@@ -879,6 +911,7 @@ fn valid_notch_source(value: &str) -> bool {
     value == "codex"
         || value == "custom"
         || value == "claude"
+        || value.strip_prefix("claude:").is_some_and(valid_slug)
         || value == "antigravity"
         || value == "both"
         || value.strip_prefix("antigravity:").is_some_and(valid_slug)

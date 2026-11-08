@@ -17,6 +17,25 @@ pub struct AccountPreference {
     pub exclude_from_suggestions: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AutoSwitchSessions { Wait, #[default] Close }
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AutoSwitch {
+    pub codex: bool,
+    pub antigravity: bool,
+    pub claude: bool,
+    pub sessions: AutoSwitchSessions,
+}
+
+impl AutoSwitch {
+    pub fn enabled(&self, provider: &str) -> bool {
+        match provider { "codex" => self.codex, "antigravity" => self.antigravity, "claude" => self.claude, _ => false }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Thresholds {
@@ -68,6 +87,7 @@ pub struct UsagePreferences {
     pub alert_rules: AlertRules,
     pub account_preferences: HashMap<String, AccountPreference>,
     pub recommendation_purpose: Purpose,
+    pub auto_switch: AutoSwitch,
 }
 
 impl UsagePreferences {
@@ -86,7 +106,7 @@ impl UsagePreferences {
         if rules.snoozed_until.is_some_and(|until| until < 0) { return Err("Choose a valid snooze time.".into()); }
         if self.account_preferences.len() > 1000 || self.account_preferences.keys().any(|key| {
             let Some((provider, id)) = key.split_once(':') else { return true; };
-            !["codex", "antigravity"].contains(&provider) || id.is_empty() || id.len() > 128
+            !["codex", "antigravity", "claude"].contains(&provider) || id.is_empty() || id.len() > 128
                 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
         }) { return Err("Choose a valid account preference.".into()); }
         Ok(())
@@ -264,7 +284,9 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid = defaults.clone(); invalid.alert_rules.quiet_end = "24:00".into();
         assert!(invalid.validate().is_err());
-        invalid = defaults; invalid.account_preferences.insert("claude:desktop".into(), AccountPreference::default());
+        invalid = defaults.clone(); invalid.account_preferences.insert("claude:desktop".into(), AccountPreference::default());
+        assert!(invalid.validate().is_ok());
+        invalid = defaults; invalid.account_preferences.insert("unknown:desktop".into(), AccountPreference::default());
         assert!(invalid.validate().is_err());
     }
 

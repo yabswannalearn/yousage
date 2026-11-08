@@ -10,6 +10,83 @@ const COMPACT: f64 = 80.0;
 #[derive(Default)]
 pub struct WindowState { pub expanded: bool, pub upward: bool, pub dragging: bool }
 
+fn in_reveal_strip(x: f64, y: f64, width: f64, height: f64, edge: DockEdge) -> bool {
+    let available = width - if matches!(edge, DockEdge::Left | DockEdge::Right) { 8.0 } else { 16.0 };
+    let visible = available.min(320.0);
+    let left = match edge { DockEdge::Left => 0.0, DockEdge::Right => width - visible, _ => (width - visible) / 2.0 };
+    let top = match edge { DockEdge::Top => 0.0, DockEdge::Bottom => height - 26.0, _ => 8.0 };
+    x >= left + 6.0 && x < left + visible - 6.0 && y >= top && y < top + 3.0
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::*;
+    #[test]
+    fn only_the_visible_top_lip_reveals_on_each_edge() {
+        assert!(in_reveal_strip(240.0, 1.0, 480.0, 40.0, DockEdge::Top));
+        assert!(!in_reveal_strip(240.0, 15.0, 480.0, 40.0, DockEdge::Top));
+        assert!(!in_reveal_strip(20.0, 1.0, 480.0, 40.0, DockEdge::Top));
+        assert!(in_reveal_strip(220.0, 9.0, 440.0, 80.0, DockEdge::Floating));
+        assert!(!in_reveal_strip(220.0, 7.0, 440.0, 80.0, DockEdge::Floating));
+        assert!(in_reveal_strip(240.0, 15.0, 480.0, 40.0, DockEdge::Bottom));
+        assert!(!in_reveal_strip(240.0, 9.0, 480.0, 40.0, DockEdge::Bottom));
+        for edge in [DockEdge::Left, DockEdge::Right] {
+            assert!(in_reveal_strip(28.0, 9.0, 58.0, 184.0, edge));
+            assert!(!in_reveal_strip(28.0, 30.0, 58.0, 184.0, edge));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn watch_pointer(app: AppHandle) {
+    // A hover-opened window need not have focus. Detect actual outside presses
+    // globally, rather than treating focus loss as a click.
+    tauri::async_runtime::spawn(async move {
+        use windows_sys::Win32::{Foundation::POINT, UI::{Input::KeyboardAndMouse::GetAsyncKeyState, WindowsAndMessaging::GetCursorPos}};
+        let mut previous = POINT { x: i32::MIN, y: i32::MIN };
+        let mut buttons = [false; 3];
+        let mut reveal_since = None;
+        let mut reveal_latched = false;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            let mut cursor = POINT { x: 0, y: 0 };
+            if unsafe { GetCursorPos(&mut cursor) } == 0 { continue; }
+            let keys = [1, 2, 4].map(|key| unsafe { GetAsyncKeyState(key) });
+            let pressed = keys.map(|key| key < 0);
+            let clicked = keys.iter().any(|key| key & 1 != 0) || pressed.iter().zip(buttons).any(|(current, old)| *current && !old);
+            buttons = pressed;
+            let moved = cursor.x != previous.x || cursor.y != previous.y;
+            previous = cursor;
+            let state = app.state::<AppState>();
+            let (expanded, dragging) = { let placement = state.window.lock().unwrap(); (placement.expanded, placement.dragging) };
+            if dragging || state.resizing.load(Ordering::SeqCst) { reveal_since = None; continue; }
+            let Some(window) = app.get_webview_window("main") else { break; };
+            if !window.is_visible().unwrap_or(false) { reveal_since = None; reveal_latched = false; continue; }
+            let (Ok(origin), Ok(size)) = (window.outer_position(), window.outer_size()) else { continue; };
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let edge = state.config.lock().unwrap().dock_edge;
+            let reveal = in_reveal_strip((cursor.x - origin.x) as f64 / scale, (cursor.y - origin.y) as f64 / scale, size.width as f64 / scale, size.height as f64 / scale, edge);
+            if !reveal { reveal_since = None; reveal_latched = false; }
+            if !expanded {
+                if reveal && !reveal_latched && !pressed.iter().any(|down| *down) {
+                    let since = reveal_since.get_or_insert_with(std::time::Instant::now);
+                    if since.elapsed() >= std::time::Duration::from_millis(200) {
+                        reveal_latched = true; reveal_since = None;
+                        let _ = app.emit("notch-hover-requested", ());
+                    }
+                } else { reveal_since = None; }
+                continue;
+            }
+            reveal_since = None;
+            let inside = cursor.x >= origin.x && cursor.y >= origin.y && cursor.x < origin.x + size.width as i32 && cursor.y < origin.y + size.height as i32;
+            if !inside {
+                if clicked { let _ = app.emit("collapse-requested", ()); }
+                else if moved { let _ = app.emit("notch-pointer-left", ()); }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 pub fn start_notch_drag(app: AppHandle) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("The notch window is unavailable.")?;
@@ -104,6 +181,7 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
         if state.resize_generation.load(Ordering::SeqCst) == generation { state.resizing.store(false, Ordering::SeqCst); }
     });
     result.map_err(|_| "Could not resize the notch.")?;
+    window.set_ignore_cursor_events(!expanded).map_err(|_| "Could not update notch click-through.")?;
     let layout = Layout { upward: placement.upward, height: placement.height as f64 / scale, width, edge };
     let _ = app.emit("notch-layout", &layout);
     Ok(layout)
@@ -253,6 +331,8 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     tray.build(app)?;
     #[cfg(windows)]
     spawn_global_hotkey(app.clone());
+    #[cfg(windows)]
+    watch_pointer(app.clone());
     let _ = set_expanded(app.clone(), false, COMPACT);
     let state = app.state::<AppState>();
     if !state.config.lock().unwrap().hidden {
@@ -272,7 +352,6 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     match event {
         WindowEvent::CloseRequested { api, .. } => { api.prevent_close(); hide_notch(app.clone()); }
         WindowEvent::Focused(true) => { let _ = app.emit("notch-focused", ()); }
-        WindowEvent::Focused(false) if !state.resizing.load(Ordering::SeqCst) && !state.window.lock().unwrap().dragging => { let _ = app.emit("collapse-requested", ()); }
         WindowEvent::Moved(position) if !state.resizing.load(Ordering::SeqCst) => {
             let placement = state.window.lock().unwrap();
             let height = window.outer_size().map(|s| s.height as i32).unwrap_or(80);

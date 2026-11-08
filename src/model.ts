@@ -51,6 +51,35 @@ export interface ClaudeStatus {
   weekly: UsageWindow | null;
   updatedAt: number | null;
   error: string | null;
+  modelLimits?: AntigravityGroup[];
+  accounts?: { id: string; label: string; email: string; active: boolean }[];
+}
+
+export interface Session {
+  id: string;
+  provider: Provider;
+  label: string;
+  title?: string | null;
+  status: 'rest' | 'working' | 'needsPermission' | 'finished';
+  startedAt: number;
+  updatedAt: number;
+}
+
+export const sessionStatusLabels: Record<Session['status'], string> = {
+  rest: 'Rest', working: 'Working', needsPermission: 'Needs permission', finished: 'Finished',
+};
+
+export function focusedSession(sessions: readonly Session[]): Session | undefined {
+  return sessions.find(session => session.status === 'working') ?? sessions.find(session => session.status === 'needsPermission') ?? sessions[0];
+}
+
+export function visibleSessions(sessions: readonly Session[], hidden: readonly string[] = [], privacy = false): Session[] {
+  return sessions.filter(session => !hidden.includes(session.provider)).slice().sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id)).map((session, index) => privacy ? { ...session, title: null, label: `${session.provider === 'claude' ? 'Claude Code' : session.provider === 'antigravity' ? 'Antigravity' : 'Codex'} session ${index + 1}` } : session);
+}
+
+export const isClaudeNotch = (source: string) => source === 'claude' || source.startsWith('claude:');
+export function claudeNotchLimits(claude: ClaudeStatus, source: string) {
+  return claude.modelLimits?.find(group => source === `claude:${group.id}`) ?? claude;
 }
 
 export const defaultProviderColors = { codex: '#b7c8b1', antigravity: '#8ab4d8', claude: '#d99a7c' };
@@ -62,6 +91,7 @@ export interface UsagePreferences {
   notchProviders: Provider[];
   notchWindow: PreviewWindowMode;
   smartNotch?: boolean;
+  autoSwitch?: Record<Provider, boolean> & { sessions: 'wait' | 'close' };
   alertRules: Record<Provider, { warningPercent: number; criticalPercent: number }> & {
     lowEnabled: boolean;
     resetEnabled: boolean;
@@ -113,6 +143,10 @@ export function usagePreferences(settings?: { usagePreferences?: unknown } | nul
     recommendationPurpose: purpose(saved.recommendationPurpose),
   };
   if (typeof saved.smartNotch === 'boolean') normalized.smartNotch = saved.smartNotch;
+  if (saved.autoSwitch != null) {
+    const automatic = record(saved.autoSwitch);
+    normalized.autoSwitch = { codex: automatic.codex === true, antigravity: automatic.antigravity === true, claude: automatic.claude === true, sessions: automatic.sessions == null || automatic.sessions === 'close' ? 'close' : 'wait' };
+  }
   // Preserve the order selected by the person, while removing duplicates.
   if (Array.isArray(saved.notchProviders)) normalized.notchProviders = [...new Set(saved.notchProviders.filter((provider): provider is Provider => providers.includes(provider as Provider)))];
   for (const provider of providers) {
@@ -130,7 +164,7 @@ export function usagePreferences(settings?: { usagePreferences?: unknown } | nul
     if (typeof rules[key] === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(rules[key])) normalized.alertRules[key] = rules[key];
   }
   if (typeof rules.snoozedUntil === 'number' && Number.isFinite(rules.snoozedUntil) && rules.snoozedUntil > 0) normalized.alertRules.snoozedUntil = rules.snoozedUntil;
-  const accountEntries = Object.entries(record(saved.accountPreferences)).filter(([id]) => /^(codex|antigravity):.+$/.test(id));
+  const accountEntries = Object.entries(record(saved.accountPreferences)).filter(([id]) => /^(codex|antigravity|claude):.+$/.test(id));
   normalized.accountPreferences = Object.fromEntries(accountEntries.map(([id, value]) => {
     const preference = record(value);
     return [id, { purpose: purpose(preference.purpose), excludeFromSuggestions: preference.excludeFromSuggestions === true }];
@@ -142,7 +176,7 @@ export function notchProviders(source: string, preferences: UsagePreferences, hi
   const selected = source === 'custom' || source.startsWith('custom:') ? preferences.notchProviders
     : isBothNotch(source) ? ['codex', 'antigravity'] as Provider[]
     : isAntigravityNotch(source) ? ['antigravity'] as Provider[]
-    : source === 'claude' ? ['claude'] as Provider[] : ['codex'] as Provider[];
+    : isClaudeNotch(source) ? ['claude'] as Provider[] : ['codex'] as Provider[];
   const visible = [...new Set(selected)].filter(provider => providers.includes(provider) && !hidden.includes(provider));
   return visible.length ? visible : providers.filter(provider => !hidden.includes(provider)).slice(0, 1);
 }
@@ -213,7 +247,7 @@ export function effectiveNotchSource(source: string, hidden: readonly string[] =
     if (visible('codex')) return 'codex';
     if (visible('antigravity')) return source.replace(/^both/, 'antigravity');
   } else if (isAntigravityNotch(source) && visible('antigravity')) return source;
-  else if (source === 'claude' && visible('claude')) return source;
+  else if (isClaudeNotch(source) && visible('claude')) return source;
   else if (source === 'codex' && visible('codex')) return source;
   return (['codex', 'antigravity', 'claude'] as const).find(visible) ?? 'none';
 }
@@ -264,7 +298,8 @@ export interface Snapshot {
   switching: string | null;
   health?: Record<Provider, ProviderHealth>;
   pacing?: Record<string, PacingEstimate>;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number };
+  autoSwitch?: Partial<Record<Provider, { message: string; nextAttemptAt: number | null }>>;
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number; sessionsEnabled?: boolean };
 }
 
 function privateAccountNames(snapshot: Snapshot): Map<string, string> {
@@ -306,6 +341,9 @@ export function privacyText(value: string, snapshot: Snapshot): string {
   }
   add(snapshot.antigravity.email, 'Antigravity account');
   add(snapshot.claude.email, 'Claude account');
+  for (const [index, account] of (snapshot.claude.accounts ?? []).entries()) {
+    add(account.label, `Claude account ${index + 1}`); add(account.email, `Claude account ${index + 1}`);
+  }
   const names = [...replacements.keys()].sort((a, b) => b.length - a.length).map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const redacted = names.length ? value.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])(${names.join('|')})(?=$|[^\\p{L}\\p{N}_])`, 'giu'), (_match, prefix: string, name: string) => prefix + replacements.get(name.toLocaleLowerCase())) : value;
   return redacted.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, 'Hidden account');
@@ -324,7 +362,7 @@ export function privacySnapshot(snapshot: Snapshot): Snapshot {
       groups: snapshot.antigravity.groups.map(group => ({ ...group, description: text(group.description) })),
       accounts: snapshot.antigravity.accounts?.map(account => ({ ...account, label: names.get(`antigravity:${account.id}`) ?? 'Antigravity account', email: null, error: text(account.error), groups: account.groups.map(group => ({ ...group, description: text(group.description) })) })),
     },
-    claude: { ...snapshot.claude, email: null, error: text(snapshot.claude.error) },
+    claude: { ...snapshot.claude, email: null, error: text(snapshot.claude.error), accounts: snapshot.claude.accounts?.map((account, index) => ({ ...account, label: `Claude account ${index + 1}`, email: '' })) },
     alerts: snapshot.alerts.map(alert => ({ ...alert, title: privacyText(alert.title, snapshot), message: privacyText(alert.message, snapshot) })),
     health: snapshot.health ? Object.fromEntries(Object.entries(snapshot.health).map(([provider, health]) => [provider, { ...health, message: privacyText(health.message, snapshot) }])) as Snapshot['health'] : undefined,
     desktopError: text(snapshot.desktopError),
@@ -335,7 +373,7 @@ export function privacySnapshot(snapshot: Snapshot): Snapshot {
 }
 
 export interface SwitchPlan {
-  provider: 'codex' | 'antigravity';
+  provider: 'codex' | 'antigravity' | 'claude';
   processNames: string[];
   id: string;
   label: string;

@@ -69,7 +69,8 @@ await page.addInitScript(() => {
 try {
   await page.goto('http://127.0.0.1:1420');
   await page.evaluate(() => { window.testBridge.delayResize = true; });
-  await page.locator('#notch-toggle').click();
+  await page.locator('#notch-toggle').evaluate(el => el.focus());
+  await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.testBridge.releaseResize);
   assert.equal(await page.locator('.details').evaluate(el => getComputedStyle(el).visibility), 'hidden', 'details must stay concealed while native resize is pending');
   await page.evaluate(() => { window.testBridge.delayResize = false; window.testBridge.releaseResize(); });
@@ -101,7 +102,13 @@ try {
   assert.equal(await header.getAttribute('aria-expanded'), 'true', 'a long drag release must not collapse the panel');
   await header.click();
   await page.waitForTimeout(320);
-  assert.equal(await header.getAttribute('aria-expanded'), 'false', 'the next intentional click must still collapse');
+  assert.equal(await header.getAttribute('aria-expanded'), 'true', 'the next intentional click pins the expanded panel');
+  assert.equal(await page.locator('#app').evaluate(el => el.classList.contains('pinned')), true);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(320);
+  await header.evaluate(el => el.focus());
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(470);
   await header.click();
   await page.waitForTimeout(250);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -109,10 +116,8 @@ try {
   await page.getByLabel('UI accent', { exact: true }).fill('#8b45ce');
   assert.equal(await page.locator('.shell').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(233, 228, 255)');
   assert.equal(await page.locator('#notifications').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(139, 69, 206)');
-  const mark = page.locator('.brand-mark img');
-  assert.equal(await mark.getAttribute('draggable'), 'false');
-  const markSvg = await page.evaluate(async src => (await fetch(src)).text(), await mark.getAttribute('src'));
-  assert.match(markSvg, /fill=['"]#9DD9F3['"]/, 'the supplied donut mark keeps its light blue color independently of app accent');
+  assert.equal(await page.locator('.provider-meter .provider-logo').count(), 2, 'each allowance identifies its provider inside the ring');
+  assert.equal(await page.locator('.compact-identity').innerText(), '', 'idle providers must not add a center label or grey dot');
   assert.equal(await page.locator('.compact .small-reading').first().evaluate(el => getComputedStyle(el).getPropertyValue('--sage').trim()), '#b7c8b1', 'app theme must preserve subscription colors');
   if (process.env.YOUSAGE_UI_SCREENSHOT) await page.screenshot({ path: process.env.YOUSAGE_UI_SCREENSHOT.replace(/\.png$/, '-light.png') });
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -132,16 +137,16 @@ try {
   const colors = await page.locator('.compact .small-reading').evaluateAll(els => els.map(el => getComputedStyle(el).getPropertyValue('--sage').trim()));
   assert.deepEqual(colors, ['#ff66aa', '#8ab4d8'], 'dual preview must retain separate provider colors');
   await page.locator('#notch-source').selectOption('claude');
-  assert.match(await page.locator('.compact-title').innerText(), /Claude/);
+  assert.equal(await page.locator('.compact [data-logo=claude]').count(), 2);
   assert.equal(await page.locator('.compact .small-reading').count(), 2);
   assert.equal(await page.locator('section[aria-label="Claude usage"] .usage-ring').count(), 2);
   await page.getByRole('checkbox', { name: 'Claude', exact: true }).uncheck();
   assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 0);
-  assert.match(await page.locator('.compact-title').innerText(), /Personal/);
+  assert.equal(await page.locator('.compact [data-logo=codex]').count(), 2);
   await page.getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
   assert.equal(await page.locator('.panel-heading').count(), 0);
   assert.equal(await page.locator('[data-action="add"]').count(), 0);
-  assert.match(await page.locator('.compact-title').innerText(), /Gemini/);
+  assert.equal(await page.locator('.compact [data-logo=antigravity]').count(), 2);
   await page.getByRole('checkbox', { name: 'Antigravity', exact: true }).uncheck();
   assert.equal(await page.locator('.compact .small-reading').count(), 0);
   assert.equal(await page.locator('#show-claude').count(), 1, 'settings must stay usable when all subscriptions are hidden');
@@ -151,7 +156,7 @@ try {
   await page.getByRole('checkbox', { name: 'Codex', exact: true }).check();
   assert.equal(await page.locator('#color-codex').inputValue(), '#ff66aa', 'hiding must preserve colors');
   await page.getByRole('checkbox', { name: 'Claude', exact: true }).check();
-  assert.match(await page.locator('.compact-title').innerText(), /Claude/, 'restoring the chosen source must restore its preview');
+  assert.equal(await page.locator('.compact [data-logo=claude]').count(), 2, 'restoring the chosen source must restore its preview');
   const settingsSize = await page.locator('.settings-panel').evaluate(el => ({ width: el.clientWidth, content: el.scrollWidth }));
   assert.ok(settingsSize.content <= settingsSize.width, 'Settings must fit within the pill width');
   await page.getByRole('button', { name: 'Send test notification', exact: true }).click();

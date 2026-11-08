@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 const REFRESH_SECONDS: u64 = 300;
 
-fn config_directory() -> PathBuf {
+pub fn config_directory() -> PathBuf {
     std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| {
         std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default().join(".claude")
     })
@@ -29,14 +29,14 @@ fn read_sign_in() -> Result<(Zeroizing<String>, Option<String>, Option<String>),
         .ok_or("A Claude subscription sign-in is required. Run `claude auth login`.")?;
     // Read only the account label. Neither credentials nor access tokens enter
     // the snapshot, webview, process arguments, or YouSage's saved files.
-    let settings_path = directory.with_extension("json");
+    let settings_path = crate::claude_accounts::account_settings_path(&directory);
     let email = std::fs::read(settings_path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|settings| settings["oauthAccount"]["emailAddress"].as_str().map(str::to_owned));
     Ok((Zeroizing::new(token.to_owned()), email, oauth["subscriptionType"].as_str().map(str::to_owned)))
 }
 
 pub fn parse_usage(value: &Value) -> Result<(Option<UsageWindow>, Option<UsageWindow>), String> {
-    if value.get("five_hour").is_none() && value.get("seven_day").is_none() {
+    if value.get("five_hour").is_none() && value.get("seven_day").is_none() && model_limits(value).is_empty() {
         return Err("Claude returned an unrecognized usage response. Try again later.".into());
     }
     let window = |key: &str| {
@@ -50,7 +50,7 @@ pub fn parse_usage(value: &Value) -> Result<(Option<UsageWindow>, Option<UsageWi
     Ok((window("five_hour"), window("seven_day")))
 }
 
-async fn fetch_usage(token: &str) -> Result<Value, (String, u64)> {
+pub async fn fetch_usage(token: &str) -> Result<Value, (String, u64)> {
     let mut command = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
     command.args([
         "--silent", "--show-error", "--max-time", "15", "--proto", "=https",
@@ -99,11 +99,13 @@ pub async fn refresh(app: &AppHandle) {
             // Never present another or expired sign-in's cached allowance as live.
             {
                 let mut snapshot = state.snapshot.lock().unwrap();
-                snapshot.claude = ClaudeStatus { error: Some(error.clone()), ..ClaudeStatus::default() };
+                let accounts = snapshot.claude.accounts.clone();
+                snapshot.claude = ClaudeStatus { accounts, error: Some(error.clone()), ..ClaudeStatus::default() };
                 let retry = now().saturating_add(snapshot.settings.refresh_seconds as i64);
                 snapshot.health.claude.update("claude", Some(&error), None, Some(retry));
             }
             *state.claude_token_fingerprint.lock().unwrap() = None;
+            crate::claude_accounts::sync_accounts(&state);
             state.emit(app);
             return;
         }
@@ -117,7 +119,8 @@ pub async fn refresh(app: &AppHandle) {
     if !known_auth_change && (now() as u64) < state.claude_next_refresh.load(Ordering::SeqCst) {
         if changed_account {
             let mut snapshot = state.snapshot.lock().unwrap();
-            snapshot.claude = ClaudeStatus { email, plan, error: Some("Claude usage is waiting for its retry cooldown.".into()), ..ClaudeStatus::default() };
+            let accounts = snapshot.claude.accounts.clone();
+            snapshot.claude = ClaudeStatus { accounts, email, plan, error: Some("Claude usage is waiting for its retry cooldown.".into()), ..ClaudeStatus::default() };
             snapshot.health.claude.last_success_at = None;
         }
         // Remember the current token so an unchanged, unidentified sign-in does
@@ -129,25 +132,26 @@ pub async fn refresh(app: &AppHandle) {
     *state.claude_token_fingerprint.lock().unwrap() = Some(fingerprint);
     {
         let mut snapshot = state.snapshot.lock().unwrap();
-        if changed_account { snapshot.claude = ClaudeStatus::default(); }
+        if changed_account { snapshot.claude = ClaudeStatus { accounts: snapshot.claude.accounts.clone(), ..ClaudeStatus::default() }; }
         snapshot.health.claude = ProviderHealth::checking(snapshot.claude.updated_at);
     }
     state.emit(app);
-    let result = fetch_usage(&token).await.and_then(|value| parse_usage(&value).map_err(|error| (error, REFRESH_SECONDS)))
-        .and_then(|windows| if windows.0.is_none() && windows.1.is_none() {
+    let result = fetch_usage(&token).await.and_then(|value| parse_usage(&value).map(|(five, week)| (five, week, model_limits(&value))).map_err(|error| (error, REFRESH_SECONDS)))
+        .and_then(|windows| if windows.0.is_none() && windows.1.is_none() && windows.2.is_empty() {
             Err(("Claude returned no allowance windows for this sign-in.".into(), REFRESH_SECONDS))
         } else { Ok(windows) });
     let delay = result.as_ref().err().map(|(_, delay)| *delay).unwrap_or(REFRESH_SECONDS);
     state.claude_next_refresh.store((now() as u64).saturating_add(delay), Ordering::SeqCst);
     {
         let mut snapshot = state.snapshot.lock().unwrap();
-        if changed_account { snapshot.claude = ClaudeStatus::default(); }
+        if changed_account { snapshot.claude = ClaudeStatus { accounts: snapshot.claude.accounts.clone(), ..ClaudeStatus::default() }; }
         let claude = &mut snapshot.claude;
         claude.email = email;
         claude.plan = plan;
         match result {
-            Ok((five_hour, weekly)) => {
+            Ok((five_hour, weekly, models)) => {
                 claude.five_hour = five_hour; claude.weekly = weekly;
+                claude.model_limits = models;
                 claude.updated_at = Some(now()); claude.error = None;
             }
             Err((error, _)) => { claude.error = Some(error); }
@@ -161,8 +165,34 @@ pub async fn refresh(app: &AppHandle) {
             snapshot.health.claude.message = "Claude returned no allowance windows for this sign-in.".into();
         }
     }
+    crate::claude_accounts::sync_accounts(&state);
     state.emit(app);
     let _ = state.persist();
+}
+
+// Model-specific weekly limits are reported separately from the overall week.
+// Discover keys instead of mistaking a Fable allowance for the total allowance.
+pub fn model_limits(value: &Value) -> Vec<crate::model::AntigravityGroup> {
+    value.as_object().into_iter().flat_map(|object| object.iter()).filter_map(|(key, data)| {
+        let model = key.strip_prefix("seven_day_")?;
+        if matches!(model, "oauth_apps" | "cowork" | "omelette") { return None; }
+        // Claude Code labels this legacy API bucket as "Fable limit".
+        // Prefer an explicit Fable bucket if a newer response includes both.
+        let model = if model == "overage_included" {
+            if value["seven_day_fable"]["utilization"].as_f64().is_some_and(|used| used.is_finite()) { return None; }
+            "fable"
+        } else { model };
+        let used = data["utilization"].as_f64().filter(|n| n.is_finite())?;
+        let label = model.split('_').filter(|part| !part.is_empty()).map(|part| {
+            let mut chars = part.chars();
+            chars.next().map(|first| first.to_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+        }).collect::<Vec<_>>().join(" ");
+        Some(crate::model::AntigravityGroup {
+            id: model.replace('_', "-"), label: format!("{label} this week"),
+            description: Some(format!("Separate weekly allowance for {label}")), five_hour: None,
+            weekly: Some(UsageWindow { remaining: (100.0 - used).clamp(0.0, 100.0), resets_at: data["resets_at"].as_str().and_then(parse_rfc3339) }),
+        })
+    }).collect()
 }
 
 #[cfg(test)]
@@ -179,6 +209,22 @@ mod tests {
         assert_eq!(five.as_ref().unwrap().remaining, 76.5);
         assert_eq!(five.unwrap().resets_at, parse_rfc3339("2026-10-17T12:00:00Z"));
         assert_eq!(week.unwrap().remaining, 0.0);
+    }
+
+    #[test]
+    fn fable_weekly_is_separate_and_missing_model_limits_are_not_invented() {
+        let usage = json!({"five_hour":{"utilization":38},"seven_day":{"utilization":61},"seven_day_overage_included":{"utilization":27,"resets_at":"2026-11-11T15:02:00Z"},"seven_day_sonnet":null});
+        let (five, week) = parse_usage(&usage).unwrap();
+        let models = model_limits(&usage);
+        assert_eq!(five.unwrap().remaining, 62.0);
+        assert_eq!(week.unwrap().remaining, 39.0);
+        assert_eq!(models.len(), 1); assert_eq!(models[0].id, "fable");
+        assert_eq!(models[0].weekly.as_ref().unwrap().remaining, 73.0);
+        assert!(models[0].five_hour.is_none());
+        assert_eq!(models[0].weekly.as_ref().unwrap().resets_at, parse_rfc3339("2026-11-11T15:02:00Z"));
+        assert!(model_limits(&json!({"seven_day": {"utilization": 40}})).is_empty());
+        let both = model_limits(&json!({"seven_day_fable":{"utilization":30},"seven_day_overage_included":{"utilization":60}}));
+        assert_eq!(both.len(), 1); assert_eq!(both[0].weekly.as_ref().unwrap().remaining, 70.0);
     }
 
     #[test]
