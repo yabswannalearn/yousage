@@ -80,3 +80,89 @@
 
 /* A local instrument trace: time on the horizontal axis, allowance on the vertical. */
 .history-panel{padding:14px 12px;border:1px solid var(--line);border-radius:14px;background:var(--card);margin:0 0 14px;min-width:0}.history-panel h2{font-size:15px;font-weight:550;letter-spacing:-.25px}.history-panel .eyebrow{font-size:8px;margin-bottom:4px}.history-ranges{display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:7px;background:var(--recess);flex:none}.history-ranges button{padding:5px 7px;border-radius:5px;font-size:9px;white-space:nowrap;color:var(--muted)}.history-ranges button[aria-pressed=true]{background:var(--card);color:var(--text)}.history-controls-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;margin-bottom:5px}.history-controls-head .field-label{margin:0}.compare-toggle[aria-pressed=true]{font-weight:600;text-decoration:underline}.history-panel #history-series{width:100%;max-width:100%;font-size:10px;margin:0 0 9px;padding:7px;text-overflow:ellipsis}.history-chart{display:block;width:100%;height:auto;overflow:visible;margin-top:4px}.history-grid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 4}.history-axis{fill:var(--muted);font:8px "Cascadia Mono",Consolas,monospace}.history-line{fill:none;stroke:var(--sage);stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round}.history-line-compare{fill:none;stroke-width:1.5;stroke-dasharray:4 3;stroke-linejoin:round;stroke-linecap:round;opacity:.85}.history-point{fill:var(--sage);stroke:var(--card);stroke-width:1;cursor:help}.history-point:hover{r:4;stroke:var(--text)}.history-reset{stroke:var(--amber);stroke-width:1;stroke-dasharray:3 4;opacity:.6}.history-legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin:4px 0 6px;font-size:8.5px;color:var(--muted)}.legend-item{display:inline-flex;align-items:center;gap:5px}.legend-dot{width:7px;height:7px;border-radius:50%;flex:none}.history-chart-caption{margin-top:0;font-size:8px}.pacing-summary{margin-top:12px;padding:10px;border-left:2px solid var(--sage);background:color-mix(in srgb,var(--sage) 4%,transparent);border-radius:0 7px 7px 0;font-size:10px;line-height:1.55}.pacing-summary.attention{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 4%,transparent)}.pacing-summary strong{font-weight:600}.pacing-summary p{color:var(--text);margin:5px 0}.pacing-summary span{display:block;color:var(--muted);font-size:8px}.pacing-empty{border-top:1px solid var(--line);padding-top:10px}.history-empty{padding:18px 3px;font-size:11px;line-height:1.6}.history-empty p{margin:0 0 6px;color:var(--text)}.history-empty span{font-size:10px;color:var(--muted)}.history-actions{display:flex;align-items:center;flex-wrap:wrap;gap:4px 13px;margin-top:9px}.history-actions .fine-print{margin-top:0;margin-left:auto;font-size:8px}.notification-health{padding:0 0 4px}.notification-health .history-actions{gap:3px 12px}.notification-health .text-button{font-size:8px}.notification-health .health-message{overflow-wrap:anywhere}input:disabled{opacity:.6}
+
+/* The closed notch frames the first session between its allowance readings. */
+.compact{cursor:default;gap:10px}
+.compact .brand-mark{display:none}
+.compact .compact-readings{display:contents}
+.compact .small-reading{order:1;min-width:0;flex:none;gap:5px}
+.compact .small-reading:first-child{order:-1}
+.compact .compact-identity{flex:1;align-items:center;min-width:0}
+.compact .compact-title{display:flex;align-items:center;justify-content:center;gap:6px;max-width:100%;font-size:11px;min-width:0}
+.session-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.compact .compact-subtitle{max-width:100%;overflow:hidden;text-overflow:ellipsis;font-size:8px}
+.compact .expand-icon{order:2;flex:none;width:12px;height:14px;margin:0;opacity:.65}
+.compact .expand-icon svg{width:13px;height:13px}
+.pinned .compact .expand-icon{transform:none;color:var(--accent-ink);opacity:1}
+.session-count{font:9px "Cascadia Mono",Consolas,monospace;color:var(--muted);flex:none}
+.session-indicator{width:7px;height:7px;flex:none;display:inline-block;border-radius:50%;background:var(--muted);opacity:.6}
+[data-status=working] .session-indicator{background:none;border:1.5px solid var(--line);border-top-color:var(--sage);border-right-color:var(--sage);opacity:1;animation:session-working 1.2s linear infinite}
+[data-status=needsPermission] .session-indicator{border-radius:2px;background:var(--amber);opacity:1}
+[data-status=needsPermission] .session-state,[data-status=needsPermission] .session-status{color:var(--amber)}
+[data-status=finished] .session-indicator{background:var(--sage);opacity:.9;animation:none;box-shadow:none}
+[data-status=finished] .session-status{color:var(--accent-ink)}
+@keyframes session-working{to{transform:rotate(360deg)}}
+.session-list{display:flex;flex-direction:column;gap:8px;padding:0 1px 12px;margin-bottom:12px;border-bottom:1px solid var(--line)}
+.session-item{display:flex;align-items:center;gap:7px;font-size:10px;min-width:0}
+.session-label{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-provider{font-size:8px;color:var(--muted);white-space:nowrap}
+.session-status{margin-left:auto;color:var(--muted);font-size:9px;white-space:nowrap}
+.weekly-only{grid-template-columns:minmax(0,1fr)}
+.saved-claude-account{display:flex;align-items:center;gap:7px;padding:9px 2px;border-bottom:1px solid var(--line);font-size:10px}
+.saved-claude-account .account-email{display:block}
+.saved-claude-account strong{font-size:10px;font-weight:550}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .reading-reset{display:none}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .usage-ring{width:18px;height:18px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .small-reading strong{font-size:10px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .reading-label{font-size:8px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-subtitle{display:inline;font-size:8px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-identity{flex-direction:row;justify-content:center;gap:8px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-subtitle{max-width:100px}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-readings{display:flex;order:0}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .small-reading{order:0}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-identity{display:flex;flex:0;max-width:100%;order:1}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-title{font-size:8px;gap:3px}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .session-title{display:none}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-subtitle{display:none}
+@media (prefers-reduced-motion:reduce){[data-status=working] .session-indicator{animation:none}}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .expand-icon{display:none}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact{gap:4px}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-readings{gap:6px}
+.auto-switch-provider+.auto-switch-provider{border-top:1px solid var(--line);margin-top:5px}
+.auto-switch-provider .setting-row .fine-print{display:block;font-size:8px;margin-top:2px}
+.auto-switch-provider>.fine-print{margin-top:0;padding-bottom:6px}
+.auto-switch-warning{font-size:9px;line-height:1.55;color:var(--amber);padding:8px;border:1px solid color-mix(in srgb,var(--amber) 30%,transparent);border-radius:8px;background:color-mix(in srgb,var(--amber) 5%,transparent)}
+.claude-account-preferences{font-size:9px;margin-top:8px;color:var(--muted)}
+.claude-account-preferences summary{cursor:pointer}
+
+/* Provider marks identify the allowance; the narrow center is for conversations. */
+#app:not(.expanded) .shell{width:min(320px,100%);height:44px;margin-inline:auto;pointer-events:none}
+#app:is([data-edge=top],[data-edge=bottom]):not(.expanded) .shell{height:26px;border-radius:0 0 10px 10px}
+#app[data-edge=bottom]:not(.expanded) .shell{margin-top:auto;border-radius:10px 10px 0 0}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .shell{width:100%;height:100%}
+#app:not(.expanded){pointer-events:none}
+.compact{height:44px;min-height:44px;padding:5px 10px;gap:8px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact{height:26px;min-height:26px;padding:2px 8px;gap:6px}
+.provider-meter{position:relative;display:inline-grid;place-items:center;width:26px;height:26px;flex:none}
+.compact .provider-meter>.usage-ring{width:100%;height:100%;stroke-width:2}
+.provider-logo{display:inline-block;width:14px;height:14px;flex:none;background-image:var(--provider-logo);background-position:center;background-size:contain;background-repeat:no-repeat}
+.provider-logo-codex{background-image:none;background-color:var(--text);mask:var(--provider-logo) center/contain no-repeat}
+.provider-meter>.provider-logo{position:absolute;width:14px;height:14px;pointer-events:none}
+.compact .compact-identity{gap:1px}
+.compact .compact-title{font-size:10px;gap:4px}
+.compact .compact-title .provider-logo{width:11px;height:11px}
+.compact .compact-subtitle{font-size:7px}
+.compact .small-reading{gap:4px}
+.compact .small-reading strong{font-size:11px}
+.compact .reading-label{font-size:8px}
+.compact .reading-reset{font-size:7px}
+.compact .expand-icon{display:none}
+.pinned .compact .expand-icon{display:block}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .provider-meter{width:21px;height:21px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .provider-meter>.provider-logo{width:11px;height:11px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-identity{flex-direction:column;gap:0}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-title{font-size:9px;line-height:12px}
+#app:is([data-edge=top],[data-edge=bottom]) .compact .compact-subtitle{font-size:7px;line-height:8px}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-identity{max-width:100%;overflow:hidden}
+#app:is([data-edge=left],[data-edge=right]):not(.expanded) .compact .compact-title>.provider-logo{display:none}
+#app[data-edge=bottom]:not(.expanded) .shell{position:absolute;bottom:0;left:50%;transform:translateX(-50%);margin-top:0}

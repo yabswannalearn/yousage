@@ -59,7 +59,8 @@ await page.addInitScript(() => {
 });
 try {
   await page.goto('http://127.0.0.1:1420');
-  await page.locator('#notch-toggle').click();
+  await page.locator('#notch-toggle').evaluate(el => el.focus());
+  await page.keyboard.press('Enter');
   await page.waitForTimeout(470);
   await page.getByRole('button', { name: 'History & pace', exact: true }).click();
   await page.waitForSelector('.history-chart');

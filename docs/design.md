@@ -31,7 +31,7 @@ Settings organizes controls into tabbed category pods (**All**, **Preview**, **T
 
 ## Interaction
 
-- Drag the compact header to move the notch; a click without dragging toggles expansion.
+- The collapsed notch passes clicks to the window underneath. Rest on the top three pixels of its visible bar for 200 ms to expand; passing over its body does not expand it. Movement outside minimizes the preview; a still pointer never triggers a timed collapse. Clicking inside the expanded notch pins it open. A click outside or Escape minimizes it. Keep header dragging for placement, and keyboard Enter/Space for accessible expansion.
 - Release within 28 logical pixels of a monitor's usable edge to dock. Drag away to return to the floating pill. Docking respects the taskbar and remembers the edge and position.
 - Release near the top edge with the notch's visible center within 32 logical pixels of the monitor's horizontal center to snap to top center. Center detection uses the dragged width before converting to the docked width.
 - Expansion reveals the shell over 420 ms with a gentle deceleration; collapse takes 240 ms. Keep details concealed until native resizing completes, and preserve the active animation across background usage updates. Reduced motion skips these transitions.
@@ -46,3 +46,7 @@ Settings organizes controls into tabbed category pods (**All**, **Preview**, **T
 ## Design review
 
 The user's approved dark pill direction takes precedence over exploring unrelated themes. Avoid a generic dashboard: use a dense utility layout, subdued sage status accents, and typographic hierarchy sized for a desktop companion. Keep the account readings as the focus and omit decorative graphics or continuously animated indicators.
+
+## Session header
+
+Use a 320 × 26 compact bar at the top or bottom edge (44 pixels tall when floating). Place the ChatGPT, Claude, or Antigravity logo inside each provider's allowance ring. Keep the center empty when there are no sessions; otherwise show the working conversation's provider logo and title, with its project name as a fallback. Show `+N` for additional sessions, keeping start order among simultaneously working sessions. Rest uses a quiet dot; Working uses a small rotating ring; Needs permission uses an amber square; Finished uses a steady subscription-colored dot with no glow or animation. The expanded panel lists all visible sessions with provider and status. A pin in the header indicates that pointer departure will leave the panel open. Respect reduced motion and privacy mode.

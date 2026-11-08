@@ -65,6 +65,19 @@ pub struct ClaudeStatus {
     pub weekly: Option<UsageWindow>,
     pub updated_at: Option<i64>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub model_limits: Vec<AntigravityGroup>,
+    #[serde(default)]
+    pub accounts: Vec<ClaudeAccount>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAccount {
+    pub id: String,
+    pub label: String,
+    pub email: String,
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

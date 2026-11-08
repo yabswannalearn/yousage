@@ -374,9 +374,9 @@ mod tests {
 
     fn snapshot(accounts: Vec<Account>) -> Snapshot {
         Snapshot { accounts, active_account_id: Some("desktop".into()), antigravity: AntigravityStatus::default(), claude: ClaudeStatus::default(), alerts: vec![],
-            update: UpdateStatus::default(), refreshing: false, desktop_error: None, login: None, switching: None, health: Health::default(),
+            update: UpdateStatus::default(), refreshing: false, desktop_error: None, login: None, switching: None, health: Health::default(), auto_switch: HashMap::new(),
             settings: Settings { start_with_windows: false, refresh_seconds: 60, notch_source: "codex".into(), notifications_enabled: true, provider_colors: ProviderColors::default(),
-                hidden_providers: vec![], app_theme: AppTheme::default(), usage_preferences: UsagePreferences::default(), privacy_mode: false, history_retention_days: 30 }, pacing: HashMap::new() }
+                hidden_providers: vec![], app_theme: AppTheme::default(), usage_preferences: UsagePreferences::default(), privacy_mode: false, history_retention_days: 30, sessions_enabled: false }, pacing: HashMap::new() }
     }
 
     fn sample(at: i64, remaining: f64, resets_at: Option<i64>) -> HistorySample { HistorySample { at, remaining, resets_at } }

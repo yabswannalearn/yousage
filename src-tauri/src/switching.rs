@@ -37,18 +37,22 @@ fn status(app: &AppHandle, message: &str) {
 
 #[tauri::command]
 pub async fn switch_account(app: AppHandle, id: String, restart_desktop: bool) -> Result<(), String> {
+    switch_account_with_request(app, id, restart_desktop, None).await
+}
+
+pub async fn switch_account_with_request(app: AppHandle, id: String, restart_desktop: bool, automatic: Option<crate::auto_switch::Request>) -> Result<(), String> {
     let state = app.state::<AppState>();
     if state.login_running.load(Ordering::SeqCst) { return Err("Finish or cancel the current sign-in first.".into()) }
     if state.switch_running.swap(true, Ordering::SeqCst) { return Err("An account switch is already running.".into()) }
     status(&app, "Preparing the account switch…");
-    let result = perform_switch(&app, &id, restart_desktop).await;
+    let result = perform_switch(&app, &id, restart_desktop, automatic.as_ref()).await;
     state.switch_running.store(false, Ordering::SeqCst);
     state.snapshot.lock().unwrap().switching = None;
     state.emit(&app);
     result
 }
 
-async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Result<(), String> {
+async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool, automatic: Option<&crate::auto_switch::Request>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let _guard = state.io.lock().await;
     if state.login_running.load(Ordering::SeqCst) { return Err("Finish or cancel the current sign-in first.".into()) }
@@ -84,6 +88,15 @@ async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Res
     if incoming.email.as_ref().is_some_and(|email| incoming_account.email.as_ref().is_some_and(|actual| !email.eq_ignore_ascii_case(actual))) {
         return Err("The saved sign-in changed. Refresh the accounts and try again.".into())
     }
+
+    let available = crate::auto_switch::windows(incoming_account.five_hour.as_ref(), incoming_account.weekly.as_ref());
+    let restart_desktop = if let Some(request) = automatic {
+        let current_home = root.clone();
+        let expected = request.identity.clone();
+        let matches = tauri::async_runtime::spawn_blocking(move || Auth::read(&current_home, store).map(|auth| auth.is_some_and(|auth| format!("{}:{}", auth.email.as_deref().unwrap_or("").to_lowercase(), auth.account_id) == expected))).await.map_err(|_| "Could not verify the current sign-in.")??;
+        if !matches { return Err("The active Codex account changed. Automatic switching was cancelled.".into()); }
+        crate::auto_switch::authorize(&state, request, &available)?
+    } else { restart_desktop };
 
     let runtime = processes::inspect(processes::Provider::Codex).await?;
     if runtime.running() && !restart_desktop { return Err("Review and confirm ‘Close sessions and switch’ before closing running apps and terminals.".into()) }
@@ -127,6 +140,7 @@ async fn perform_switch(app: &AppHandle, id: &str, restart_desktop: bool) -> Res
         if processes::inspect(processes::Provider::Codex).await?.running() {
             return Err("A Codex or ChatGPT session started during the switch. No sign-in was changed. Review the sessions and retry.".into())
         }
+        if let Some(request) = automatic { crate::auto_switch::authorize(&state, request, &available)?; }
         let current_home = root.clone();
         let write = tauri::async_runtime::spawn_blocking(move || incoming.write(&current_home, store)).await.map_err(|_| "Could not switch the saved sign-in.")?;
         // A failed atomic replacement leaves the previous credential intact.

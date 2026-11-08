@@ -9,3 +9,4 @@ src-tauri/gen/schemas/
 *.log
 .DS_Store
 artifacts/docking/
+artifacts/notch/

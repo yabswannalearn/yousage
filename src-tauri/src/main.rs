@@ -8,13 +8,17 @@ mod model;
 mod rpc;
 mod state;
 mod claude;
+mod claude_accounts;
 mod usage;
 mod history;
 mod notifications;
+mod sessions;
+mod auto_switch;
 
 use tauri::Manager;
 
 fn main() {
+    if sessions::handle_hook() { return; }
     notifications::set_process_identity();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| desktop::show(app)))
@@ -23,6 +27,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             state::get_snapshot, state::refresh_usage, state::dismiss_alert, state::clear_alerts, state::test_notification,
             state::save_antigravity_account, state::switch_antigravity_account, state::rename_antigravity_account, state::disconnect_antigravity_account,
+            claude_accounts::save_claude_account, claude_accounts::prepare_claude_switch, claude_accounts::switch_claude_account, claude_accounts::disconnect_claude_account,
+            sessions::set_session_tracking, sessions::get_sessions,
             state::check_for_updates, state::open_release_url,
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings, state::update_usage_preferences,
@@ -39,11 +45,13 @@ fn main() {
                 eprintln!("Could not initialize native notifications: {error}");
             }
             desktop::setup(app.handle())?;
+            sessions::watch(app.handle().clone());
             state::check_for_updates(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     state::refresh_all(handle.clone()).await;
+                    auto_switch::run(handle.clone()).await;
                     let seconds = handle.state::<state::AppState>().config.lock().unwrap().refresh_seconds;
                     tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                 }
