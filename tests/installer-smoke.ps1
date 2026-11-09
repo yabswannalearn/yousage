@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)]
     [string]$Installer,
     [Parameter(Mandatory)]
-    [string]$Executable
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,8 +49,12 @@ Set-Content -LiteralPath $marker -Value 'keep through upgrade'
 
 Invoke-Installer (Resolve-Path -LiteralPath $Installer).Path
 $installedHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash
-if ($installedHash -eq $previousHash -or $installedHash -ne (Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash) {
-    throw 'The upgrade did not install the candidate executable.'
+# Tauri embeds NSIS metadata in the packaged executable and restores the
+# unpatched standalone build afterward, so their hashes differ by design.
+$installedVersion = (Get-Item -LiteralPath $installed).VersionInfo.ProductVersion
+$registeredVersion = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\YouSage').DisplayVersion
+if ($installedHash -eq $previousHash -or $installedVersion -ne $Version -or $registeredVersion -ne $Version) {
+    throw "Expected YouSage $Version after upgrade. Executable: $installedVersion. Registry: $registeredVersion."
 }
 if ((Get-Content -LiteralPath $marker -Raw).Trim() -ne 'keep through upgrade') {
     throw 'The upgrade did not preserve app data.'
