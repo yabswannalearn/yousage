@@ -189,12 +189,21 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
 
 pub fn show(app: &AppHandle) {
     let _ = set_expanded(app.clone(), false, COMPACT);
+    reveal_window(app);
+    let _ = app.emit("panel-collapsed", ());
+}
+
+fn reveal_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show(); let _ = window.set_focus();
         app.state::<AppState>().config.lock().unwrap().hidden = false;
         let _ = app.state::<AppState>().persist();
-        let _ = app.emit("panel-collapsed", ());
     }
+}
+
+fn open_dashboard(app: &AppHandle) {
+    reveal_window(app);
+    let _ = app.emit("tray-open-dashboard", ());
 }
 
 #[tauri::command]
@@ -303,7 +312,7 @@ fn spawn_global_hotkey(app: AppHandle) {
 }
 
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item = MenuItem::with_id(app, "show", "Show notch (Alt+Shift+U)", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "Open dashboard", true, None::<&str>)?;
     let cycle_item = MenuItem::with_id(app, "cycle-notch", "Cycle notch preview (Alt+Shift+N)", true, None::<&str>)?;
     let switch_item = MenuItem::with_id(app, "review-switch", "Review account switch…", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide notch", true, None::<&str>)?;
@@ -313,10 +322,10 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let menu = Menu::with_items(app, &[&show_item, &cycle_item, &switch_item, &hide_item, &refresh_item, &privacy_item, &quit_item])?;
     let mut tray = TrayIconBuilder::with_id("yousage").tooltip("YouSage · Codex & Antigravity usage (Alt+Shift+U)").menu(&menu).show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
-            if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { show(tray.app_handle()); }
+            if matches!(event, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) { open_dashboard(tray.app_handle()); }
         })
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show(app),
+            "show" => open_dashboard(app),
             "cycle-notch" => { let _ = app.emit("hotkey-cycle-notch", ()); },
             "review-switch" => { show(app); let _ = app.emit("tray-review-switch", ()); },
             "hide" => hide_notch(app.clone()),
@@ -335,8 +344,15 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     watch_pointer(app.clone());
     let _ = set_expanded(app.clone(), false, COMPACT);
     let state = app.state::<AppState>();
-    if !state.config.lock().unwrap().hidden {
-        if let Some(window) = app.get_webview_window("main") { window.show()?; }
+    let (hidden, first_run) = {
+        let config = state.config.lock().unwrap();
+        (config.hidden, !config.onboarding_completed)
+    };
+    if !hidden {
+        if let Some(window) = app.get_webview_window("main") {
+            window.show()?;
+            if first_run { let _ = window.set_focus(); }
+        }
     }
     if !cfg!(debug_assertions) {
         let enabled = state.config.lock().unwrap().start_with_windows;

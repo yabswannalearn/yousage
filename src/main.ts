@@ -51,7 +51,7 @@ import {
 
 const native = isTauri();
 const params = new URLSearchParams(location.search);
-const preview = !native && import.meta.env.DEV && params.has('preview');
+const preview = !native && params.has('preview');
 const root = document.querySelector<HTMLElement>('#app')!;
 let snapshot: Snapshot = {
   accounts: [],
@@ -89,7 +89,8 @@ function applyLayout(layout: NotchLayout) {
 }
 type SettingsTab = 'all' | 'general' | 'appearance' | 'alerts' | 'system';
 let settingsOpen = false;
-let settingsTab: SettingsTab = 'all';
+let settingsTab: SettingsTab = 'general';
+let onboardingProviders = new Set<Provider>(['codex']);
 let providerFilter: 'all' | Provider = 'all';
 let adding = false;
 let savingAgy = false;
@@ -160,7 +161,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const edge = dockEdge;
     const side = edge === 'left' || edge === 'right';
     const compact = side ? 184 : edge === 'floating' ? 80 : 40;
-    return { edge, width: side && !args?.expanded ? 58 : side || edge === 'floating' ? 440 : 480, upward: edge === 'bottom' || (edge === 'floating' && params.has('up')), height: args?.expanded ? Math.min(Math.max(compact, Number(args?.height ?? 80)), innerHeight - 64) : compact } as T;
+    return { edge, width: Math.min(innerWidth, side && !args?.expanded ? 58 : side || edge === 'floating' ? 440 : 480), upward: edge === 'bottom' || (edge === 'floating' && params.has('up')), height: args?.expanded ? Math.min(Math.max(compact, Number(args?.height ?? 80)), innerHeight - 64) : compact } as T;
   }
   if (command === 'get_snapshot') return snapshot as T;
   if (command === 'get_sessions') return sessions as T;
@@ -286,6 +287,11 @@ function providerLogo(provider: Provider) {
 const visible = (provider: Provider) => !snapshot.settings.hiddenProviders.includes(provider);
 const notchSource = () => effectiveNotchSource(snapshot.settings.notchSource, snapshot.settings.hiddenProviders);
 const providerNames: Record<Provider, string> = { codex: 'Codex', antigravity: 'Antigravity', claude: 'Claude' };
+const providerSetup = {
+  codex: 'Sign in to Codex on this PC, or connect a ChatGPT account.',
+  antigravity: 'Install the Antigravity CLI and sign in with agy.',
+  claude: 'Install Claude Code and run claude auth login.',
+};
 const preferences = () => preferenceDraft ?? usagePreferences(snapshot.settings);
 const selectedProviders = () => notchProviders(snapshot.settings.notchSource, preferences(), snapshot.settings.hiddenProviders);
 const inPreview = (provider: Provider) => selectedProviders().includes(provider);
@@ -524,7 +530,7 @@ function claudeSection() {
   const saveForm = savingClaude && !snapshot.settings.privacyMode ? `<form class="manage-form" data-form="save-claude"><label class="field-label" for="claude-save-label">Name this Claude Code account</label><div class="inline-input"><input id="claude-save-label" name="label" value="${esc(claude.accounts?.find(account => account.active)?.label ?? claude.email?.split('@')[0] ?? 'Personal')}" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button><button class="text-button" type="button" data-action="cancel-save-claude">Cancel</button></div></form>` : '';
   const models = (claude.modelLimits ?? []).map(group => `<article class="account-card model-allowance"><div class="account-heading"><span class="avatar">${esc(group.label[0])}</span><div class="account-identity"><div class="account-name">${esc(group.label)}${snapshot.settings.notchSource === `claude:${group.id}` ? '<span class="active-badge">In notch</span>' : `<button class="text-button notch-pill" data-action="set-notch" data-source="claude:${esc(group.id)}">Show in notch</button>`}</div><div class="account-email">${esc(group.description ?? 'Separate weekly allowance')}</div></div></div><div class="limits weekly-only">${limitRow('Weekly', group.weekly, 'claude')}</div></article>`).join('');
   const accounts = (claude.accounts ?? []).map(account => `<div class="saved-claude-account"><div class="account-identity"><strong>${esc(account.label)}</strong><span class="account-email">${esc(account.email)}${account.active ? ' · Active' : ''}</span></div>${!account.active ? `<button class="subtle-button" data-action="switch-claude" data-id="${esc(account.id)}" ${snapshot.switching || preparingSwitch || switchPlan ? 'disabled' : ''}>Switch account</button>` : ''}${iconButton('remove-claude', 'x', 'Remove saved Claude account', `data-id="${esc(account.id)}" ${snapshot.switching ? 'disabled' : ''}`)}</div>`).join('');
-  return `<section class="provider-section" aria-label="Claude usage" ${accentStyle('claude')}><div class="section-divider"><span class="eyebrow">CLAUDE</span><div class="provider-heading"><h2>Subscription usage</h2>${claude.email && !snapshot.settings.privacyMode ? '<button class="text-button" data-action="save-claude">Save sign-in</button>' : ''}</div></div><article class="account-card ${inNotch ? 'active' : ''}"><div class="account-heading"><span class="avatar">C</span><div class="account-identity"><div class="account-name">Claude${claude.plan ? `<span class="plan"> · ${esc(claude.plan)}</span>` : ''}${inNotch && !snapshot.settings.notchSource.startsWith('claude:') ? '<span class="active-badge">In notch</span>' : '<button type="button" class="text-button notch-pill" data-action="set-notch" data-source="claude">Show in notch</button>'}</div><div class="account-email">${esc(claude.email ?? 'Claude Code subscription')}</div></div></div><div class="limits">${limitRow('5 hour', claude.fiveHour, 'claude')}${limitRow('Weekly', claude.weekly, 'claude')}</div><div class="account-status ${claude.error ? 'attention' : ''}"><span class="status-dot"></span><span>${esc(freshness(claude))}</span>${paceBadge}</div>${claude.error ? `<p class="account-error">${esc(claude.error)}</p>` : ''}${saveForm}</article>${models}${accounts ? `<div class="claude-accounts">${accounts}${(claude.accounts ?? []).map(account => `<details class="claude-account-preferences"><summary>${esc(account.label)} preferences</summary>${accountPreferenceControls(account.id, 'claude')}</details>`).join('')}</div>` : ''}<p class="fine-print">Save each sign-in once to switch Claude Code accounts. To add another, run <code>claude auth login</code>, then save that sign-in here.</p></section>`;
+  return `<section class="provider-section" aria-label="Claude usage" ${accentStyle('claude')}><div class="section-divider"><span class="eyebrow">CLAUDE</span><div class="provider-heading"><h2>Subscription usage</h2>${claude.email && !snapshot.settings.privacyMode ? '<button class="text-button" data-action="save-claude">Save sign-in</button>' : ''}</div></div><article class="account-card ${inNotch ? 'active' : ''}"><div class="account-heading"><span class="avatar">C</span><div class="account-identity"><div class="account-name">Claude${claude.plan ? `<span class="plan"> · ${esc(claude.plan)}</span>` : ''}${inNotch && !snapshot.settings.notchSource.startsWith('claude:') ? '<span class="active-badge">In notch</span>' : '<button type="button" class="text-button notch-pill" data-action="set-notch" data-source="claude">Show in notch</button>'}</div><div class="account-email">${esc(claude.email ?? 'Claude Code subscription')}</div></div></div><div class="limits">${limitRow('5 hour', claude.fiveHour, 'claude')}${limitRow('Weekly', claude.weekly, 'claude')}</div><div class="account-status ${claude.error ? 'attention' : ''}"><span class="status-dot"></span><span>${esc(freshness(claude))}</span>${paceBadge}</div>${claude.error ? `<p class="account-error">${esc(claude.error)}</p>` : ''}${!claude.email ? providerRecovery('claude') : ''}${saveForm}</article>${models}${accounts ? `<div class="claude-accounts">${accounts}${(claude.accounts ?? []).map(account => `<details class="claude-account-preferences"><summary>${esc(account.label)} preferences</summary>${accountPreferenceControls(account.id, 'claude')}</details>`).join('')}</div>` : ''}<p class="fine-print">Save each sign-in once to switch Claude Code accounts. To add another, run <code>claude auth login</code>, then save that sign-in here.</p></section>`;
 }
 
 function currentSessions() {
@@ -602,7 +608,7 @@ function antigravitySection() {
   const savedAccounts = (antigravity.accounts ?? []).filter(a => !a.active);
   const activeSaved = (antigravity.accounts ?? []).find(a => a.active && a.id !== 'active');
   const saveForm = savingAgy && !snapshot.settings.privacyMode ? `<form class="manage-form agy-save-form" data-form="save-agy"><label class="field-label" for="agy-save-label">Save current Antigravity sign-in (${esc(antigravity.email ?? 'active')})</label><div class="inline-input"><input id="agy-save-label" name="label" value="${esc(activeSaved?.label ?? antigravity.email?.split('@')[0] ?? 'Personal')}" placeholder="Work or Personal" maxlength="48" required autocomplete="off"/><button class="subtle-button" type="submit">Save</button><button class="text-button" type="button" data-action="cancel-save-agy">Cancel</button></div></form>` : '';
-  return `<section class="provider-section" aria-label="Antigravity usage" ${accentStyle('antigravity')}><div class="section-divider"><div><span class="eyebrow">ANTIGRAVITY</span><div class="provider-heading"><h2>Model quotas<span class="account-count">${antigravity.groups.length}</span></h2><span class="account-status provider-status ${antigravity.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(antigravity))}</span></div>${antigravity.email ? `<div class="provider-email">${esc(antigravity.email)}${activeSaved ? ` · <strong>${esc(activeSaved.label)}</strong>` : ''}${!savingAgy && !snapshot.settings.privacyMode ? ` <button type="button" class="text-button notch-pill" data-action="toggle-save-agy">${activeSaved ? 'Update saved' : 'Save sign-in'}</button>` : ''}</div>` : ''}</div></div>${saveForm}${antigravity.groups.map(group => antigravityGroupCard(group, selected?.id)).join('')}${savedAccounts.map(savedAntigravityAccountCard).join('')}${antigravity.groups.length === 0 ? `<div class="empty-state compact-empty"><h2>${snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity quota'}</h2><p>${esc(antigravity.error ?? 'Sign in with Antigravity CLI (agy) to view model quotas.')}</p></div>` : antigravity.error ? `<p class="account-error">${esc(antigravity.error)}</p>` : ''}</section>`;
+  return `<section class="provider-section" aria-label="Antigravity usage" ${accentStyle('antigravity')}><div class="section-divider"><div><span class="eyebrow">ANTIGRAVITY</span><div class="provider-heading"><h2>Model quotas<span class="account-count">${antigravity.groups.length}</span></h2><span class="account-status provider-status ${antigravity.error ? 'attention' : ''}"><span class="status-dot"></span>${esc(freshness(antigravity))}</span></div>${antigravity.email ? `<div class="provider-email">${esc(antigravity.email)}${activeSaved ? ` · <strong>${esc(activeSaved.label)}</strong>` : ''}${!savingAgy && !snapshot.settings.privacyMode ? ` <button type="button" class="text-button notch-pill" data-action="toggle-save-agy">${activeSaved ? 'Update saved' : 'Save sign-in'}</button>` : ''}</div>` : ''}</div></div>${saveForm}${antigravity.groups.map(group => antigravityGroupCard(group, selected?.id)).join('')}${savedAccounts.map(savedAntigravityAccountCard).join('')}${antigravity.groups.length === 0 ? `<div class="empty-state compact-empty"><h2>${snapshot.refreshing ? 'Checking Antigravity' : 'Antigravity quota'}</h2><p>${esc(antigravity.error ?? 'Sign in with Antigravity CLI (agy) to view model quotas.')}</p>${!antigravity.email ? providerRecovery('antigravity') : ''}</div>` : antigravity.error ? `<p class="account-error">${esc(antigravity.error)}</p>` : ''}</section>`;
 }
 
 function switchPanel() {
@@ -617,7 +623,6 @@ function switchPanel() {
 function providerFilterBar() {
   const visibleProviders = (['codex', 'antigravity', 'claude'] as Provider[]).filter(visible);
   if (visibleProviders.length <= 1) return '';
-  if (providerFilter !== 'all' && !visible(providerFilter)) providerFilter = 'all';
   return `<div class="provider-filter" role="group" aria-label="Filter subscriptions"><button type="button" data-action="filter-provider" data-provider="all" aria-pressed="${providerFilter === 'all'}">All</button>${visibleProviders.map(provider => `<button type="button" data-action="filter-provider" data-provider="${provider}" aria-pressed="${providerFilter === provider}" style="--dot:${providerColor(snapshot.settings.providerColors, provider)}"><span class="filter-dot"></span>${providerNames[provider]}</button>`).join('')}</div>`;
 }
 
@@ -673,7 +678,20 @@ function addPanel() {
   const signingIn = snapshot.login && !snapshot.login.error;
   if (signingIn) return `<section class="add-panel"><div class="connection-symbol">${icon('plus')}</div><h2>${esc(snapshot.login!.status)}</h2><p>Your current Codex sign-in stays connected.</p><button class="subtle-button" data-action="cancel-login">Cancel sign-in</button></section>`;
   if (!adding || snapshot.settings.privacyMode) return '';
-  return `<section class="add-panel"><div class="section-heading"><h2>Connect an account</h2>${iconButton('cancel-add', 'x', 'Cancel')}</div><form data-form="connect"><label class="field-label" for="account-label">Account name</label><input id="account-label" name="label" placeholder="Work or Personal" maxlength="48" autocomplete="off" required/><p>Sign in with ChatGPT in your browser. You only need to do this once per account.</p><button class="primary-button" type="submit">Continue in browser <span aria-hidden="true">↗</span></button></form></section>`;
+  return `<section class="add-panel"><div class="section-heading"><h2>Connect a Codex account</h2>${iconButton('cancel-add', 'x', 'Cancel')}</div><form data-form="connect"><label class="field-label" for="account-label">Account name</label><input id="account-label" name="label" placeholder="Work or Personal" maxlength="48" autocomplete="off" required/><p>Sign in with ChatGPT in your browser. You only need to do this once per account.</p><button class="primary-button" type="submit">Continue in browser <span aria-hidden="true">↗</span></button></form></section>`;
+}
+
+function onboardingPanel() {
+  const rows = (Object.keys(providerNames) as Provider[]).map(provider => {
+    const connected = snapshot.health?.[provider]?.status === 'ready';
+    return `<label class="setup-provider" ${accentStyle(provider)}>${providerLogo(provider)}<span><strong>${providerNames[provider]}</strong><span>${connected ? 'Sign-in detected' : providerSetup[provider]}</span></span><input type="checkbox" class="switch" id="setup-${provider}" data-setup-provider="${provider}" aria-label="Track ${providerNames[provider]}" ${onboardingProviders.has(provider) ? 'checked' : ''}/></label>`;
+  }).join('');
+  return `<section class="onboarding" aria-labelledby="onboarding-title"><span class="eyebrow">GET STARTED</span><h1 id="onboarding-title" tabindex="-1">Choose what to track</h1><p>See your remaining allowance and reset times in the notch.</p><div class="setup-providers">${rows}</div><button type="button" class="primary-button" data-action="finish-onboarding" ${onboardingProviders.size ? '' : 'disabled'}>Open dashboard <span aria-hidden="true">→</span></button><button type="button" class="text-button setup-skip" data-action="skip-onboarding">Set up later</button></section>`;
+}
+
+function providerRecovery(provider: 'antigravity' | 'claude') {
+  const command = snapshot.health?.[provider]?.recoveryCommand ?? (provider === 'claude' ? 'claude auth login' : 'agy');
+  return `<button type="button" class="subtle-button provider-recovery" data-action="copy-recovery" data-command="${esc(command)}">Copy ${providerNames[provider]} sign-in command</button>`;
 }
 
 function render(autoSync = true) {
@@ -681,6 +699,7 @@ function render(autoSync = true) {
   if (transition && autoSync) return;
   if (dragging || colorPickerOpen || rendering) return;
   const rawSnapshot = snapshot;
+   if (providerFilter !== 'all' && !visible(providerFilter)) providerFilter = 'all';
   const privacyChanged = renderedPrivacy !== Boolean(rawSnapshot.settings.privacyMode);
   if (privacyChanged && rawSnapshot.settings.privacyMode) { adding = false; savingAgy = false; savingClaude = false; }
   renderSourceSnapshot = rawSnapshot;
@@ -688,7 +707,7 @@ function render(autoSync = true) {
   try {
   applyAppTheme(snapshot.settings.appTheme ?? defaultAppTheme);
   const focused = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
-  const focusTarget = focused ? { id: focused.id, action: focused.dataset.action, accountId: focused.dataset.id, restore: document.hasFocus() } : null;
+   const focusTarget = focused ? { id: focused.id, action: focused.dataset.action, data: Object.entries(focused.dataset), restore: document.hasFocus() } : null;
   const preserved = focused instanceof HTMLInputElement && (!(privacyChanged || snapshot.settings.privacyMode) || ['number', 'time'].includes(focused.type)) && ['text', 'search', 'number', 'time'].includes(focused.type) ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
   const nameDrafts = privacyChanged || snapshot.settings.privacyMode ? [] : Array.from(root.querySelectorAll<HTMLInputElement>('input:not([type]), input[type="text"], input[type="search"]')).map(input => ({ id: input.id, value: input.value }));
   const scrollTop = root.querySelector('.panel-scroll')?.scrollTop ?? 0;
@@ -721,7 +740,9 @@ function render(autoSync = true) {
   const showCodexSection = visible('codex') && (providerFilter === 'all' || providerFilter === 'codex');
   root.className = `${expanded ? 'expanded' : ''} ${pinned ? 'pinned' : ''} ${upward ? 'upward' : ''} ${opening ? 'opening' : ''} ${preparingOpen ? 'preparing-open' : ''}`;
   rendering = true;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} data-status="${status}" class="compact ${providers.length === 3 ? 'three-providers' : ''}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="compact-identity">${firstSession ? `<span class="compact-title">${providerLogo(firstSession.provider)}<span class="session-title">${esc(firstSession.title ?? firstSession.label)}</span>${activeSessions.length > 1 ? `<span class="session-count" aria-label="${activeSessions.length - 1} more sessions">+${activeSessions.length - 1}</span>` : ''}</span><span class="compact-subtitle"><span class="session-state">${sessionStatusLabels[status]}</span></span>` : ''}</span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon(pinned ? 'pin' : 'chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(redact(error || snapshot.login!.error!))}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(redact(notice))}</div>` : ''}${sessionList()}${alertsBanner()}${historyOpen ? historyPanel() : ''}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : providerFilterBar()}${switchPanel()}${showCodexSection ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div></div><footer class="panel-footer">${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('history', 'history', 'History & pace', `aria-pressed="${historyOpen}"`)}${iconButton('privacy', 'privacy', 'Toggle privacy mode', `aria-pressed="${Boolean(snapshot.settings.privacyMode)}"`)}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div></footer></section>` : ''}</div>`;
+  const firstRun = snapshot.settings.onboardingCompleted === false;
+  const dashboard = !expanded || firstRun ? '' : `${sessionList()}${alertsBanner()}${historyOpen ? historyPanel() : ''}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : providerFilterBar()}${switchPanel()}${showCodexSection ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} data-status="${status}" class="compact ${providers.length === 3 ? 'three-providers' : ''}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="compact-identity">${firstSession ? `<span class="compact-title">${providerLogo(firstSession.provider)}<span class="session-title">${esc(firstSession.title ?? firstSession.label)}</span>${activeSessions.length > 1 ? `<span class="session-count" aria-label="${activeSessions.length - 1} more sessions">+${activeSessions.length - 1}</span>` : ''}</span><span class="compact-subtitle"><span class="session-state">${sessionStatusLabels[status]}</span></span>` : ''}</span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon(pinned ? 'pin' : 'chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(redact(error || snapshot.login!.error!))}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(redact(notice))}</div>` : ''}${firstRun ? onboardingPanel() : dashboard}</div><footer class="panel-footer">${firstRun ? '<span class="fine-print">Reopen any time from the system tray.</span>' : `${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add Codex account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('history', 'history', 'History & pace', `aria-pressed="${historyOpen}"`)}${iconButton('privacy', 'privacy', 'Toggle privacy mode', `aria-pressed="${Boolean(snapshot.settings.privacyMode)}"`)}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div>`}</footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   rendering = false;
   if (scroll) scroll.scrollTop = scrollTop;
@@ -737,7 +758,7 @@ function render(autoSync = true) {
     }
   }
   if (focusTarget?.restore) {
-    const target = focusTarget.id ? document.getElementById(focusTarget.id) : Array.from(root.querySelectorAll<HTMLElement>('[data-action]')).find(element => element.dataset.action === focusTarget.action && element.dataset.id === focusTarget.accountId);
+     const target = focusTarget.id ? document.getElementById(focusTarget.id) : Array.from(root.querySelectorAll<HTMLElement>('[data-action]')).find(element => focusTarget.action && focusTarget.data.every(([key, value]) => element.dataset[key] === value));
     target?.focus({ preventScroll: true });
   }
   renderedPrivacy = Boolean(rawSnapshot.settings.privacyMode);
@@ -782,7 +803,7 @@ async function toggle(open = !expanded) {
     opening = false;
     root.classList.add('closing');
     await new Promise(resolve => setTimeout(resolve, motionMs(CLOSE_MS)));
-    expanded = false; settingsOpen = false; settingsTab = 'all'; providerFilter = 'all'; historyOpen = false; historyRequest++; clearTimeout(historyRefreshTimer); adding = false; savingAgy = false; savingClaude = false; managing = null; managingAgy = null; disconnectConfirmation = null; disconnectAgyConfirmation = null; switchPlan = null; desiredHeight = 0;
+    expanded = false; settingsOpen = false; settingsTab = 'general'; providerFilter = 'all'; historyOpen = false; historyRequest++; clearTimeout(historyRefreshTimer); adding = false; savingAgy = false; savingClaude = false; managing = null; managingAgy = null; disconnectConfirmation = null; disconnectAgyConfirmation = null; switchPlan = null; desiredHeight = 0;
     applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   }
   transition = false;
@@ -860,6 +881,16 @@ root.addEventListener('click', event => {
   const id = target.dataset.id;
   switch (target.dataset.action) {
     case 'toggle': break;
+    case 'finish-onboarding':
+    case 'skip-onboarding':
+      void attempt(async () => {
+        const providers = target.dataset.action === 'finish-onboarding' ? [...onboardingProviders] : null;
+        await call('finish_onboarding', { providers });
+        snapshot = await call<Snapshot>('get_snapshot');
+        render();
+        root.querySelector<HTMLElement>('#notch-toggle')?.focus({ preventScroll: true });
+      });
+      break;
     case 'session-tracking': void attempt(async () => {
       await call('set_session_tracking', { enabled: !snapshot.settings.sessionsEnabled });
       notice = snapshot.settings.sessionsEnabled ? 'Session status enabled. Review the new hooks in Codex Settings → Hooks and start new coding sessions.' : 'Session status disabled.';
@@ -904,7 +935,7 @@ root.addEventListener('click', event => {
     case 'snooze-alerts': void attempt(() => savePreferences({ ...preferences(), alertRules: { ...preferences().alertRules, snoozedUntil: Math.floor(Date.now() / 1000) + 3600 } })); break;
     case 'resume-alerts': void attempt(() => savePreferences({ ...preferences(), alertRules: { ...preferences().alertRules, snoozedUntil: null } })); break;
     case 'hide': void attempt(async () => { await call('hide_notch'); expanded = false; if (preview) root.style.height = '80px'; }); break;
-    case 'settings': settingsOpen = !settingsOpen; if (!settingsOpen) settingsTab = 'all'; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'start' }); if (settingsOpen) void checkNotifications(); break;
+    case 'settings': settingsOpen = !settingsOpen; render(); root.querySelector('.settings-panel')?.scrollIntoView({ block: 'start' }); if (settingsOpen) void checkNotifications(); break;
     case 'settings-tab': {
       const tab = target.dataset.tab as SettingsTab | undefined;
       if (tab) { settingsTab = tab; render(); }
@@ -929,7 +960,7 @@ root.addEventListener('click', event => {
     }
     case 'cycle-notch': void attempt(cycleNotch); break;
     case 'reset-app-theme': void attempt(() => call('update_settings', { ...snapshot.settings, appTheme: { ...defaultAppTheme } })); break;
-    case 'add': if (snapshot.settings.privacyMode) { notice = 'Turn off privacy mode to connect an account.'; render(); break; } adding = true; error = ''; render(); document.getElementById('account-label')?.focus(); break;
+    case 'add': if (snapshot.settings.privacyMode) { notice = 'Turn off privacy mode to connect an account.'; render(); break; } providerFilter = 'codex'; adding = true; error = ''; render(); document.getElementById('account-label')?.focus(); break;
     case 'cancel-add': adding = false; render(); break;
     case 'cancel-login': void attempt(() => call('cancel_sign_in')); break;
     case 'manage': managing = managing === id ? null : id!; disconnectConfirmation = null; render(); break;
@@ -1001,6 +1032,12 @@ root.addEventListener('input', event => {
 
 root.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
+  if (input.dataset.setupProvider) {
+    const provider = input.dataset.setupProvider as Provider;
+    if (input.checked) onboardingProviders.add(provider); else onboardingProviders.delete(provider);
+    render();
+    return;
+  }
   if (input.id === 'privacy-mode') { void attempt(() => setPrivacy(input.checked)); return; }
   if (input.id === 'smart-notch') { void attempt(() => savePreferences({ ...preferences(), smartNotch: input.checked })); return; }
   if (input.dataset.autoSwitch || input.id === 'auto-switch-sessions') {
@@ -1186,8 +1223,8 @@ async function start() {
     return;
   }
   if (!native) {
-    root.innerHTML = '<div class="browser-message"><h1>YouSage</h1><p>Open the Windows desktop app to view your Codex and Antigravity usage.</p><a href="?preview=1&expanded=1">Open the interface preview</a></div>';
-    document.documentElement.classList.add('browser-preview');
+    root.innerHTML = '<main class="browser-message"><span class="eyebrow">WINDOWS DESKTOP NOTCH</span><h1>YouSage</h1><p>See the allowance left in Codex, Antigravity, and Claude Code. The interactive demo uses sample accounts and keeps them in this tab.</p><a href="?preview=1&expanded=1">Open the interface preview</a><a href="https://github.com/yabswannalearn/yousage/releases/latest">Download for Windows</a></main>';
+    document.documentElement.classList.add('browser-landing');
     return;
   }
   await listen<Snapshot>('usage-updated', event => {
@@ -1201,6 +1238,7 @@ async function start() {
   sessions = await call<Session[]>('get_sessions') ?? [];
   await listen<NotchLayout>('notch-layout', event => { applyLayout(event.payload); });
   await listen('hotkey-toggle', () => { if (!transition) { if (!expanded) pinOpen(); void toggle(); } });
+  await listen('tray-open-dashboard', () => { pinOpen(); if (!expanded) void attempt(() => toggle(true)); });
   await listen('hotkey-cycle-notch', () => { void attempt(cycleNotch); });
   await listen('tray-review-switch', () => {
     void (async () => {
@@ -1224,6 +1262,13 @@ async function start() {
   snapshot = await call<Snapshot>('get_snapshot');
   applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
   render();
+  if (snapshot.settings.onboardingCompleted === false) {
+    const detected = (Object.keys(providerNames) as Provider[]).filter(provider => snapshot.health?.[provider]?.status === 'ready');
+    if (detected.length) onboardingProviders = new Set(detected);
+    pinOpen();
+    await toggle(true);
+    document.getElementById('onboarding-title')?.focus({ preventScroll: true });
+  }
 }
 
 void start().catch(err => { error = String(err); expanded = true; render(); });

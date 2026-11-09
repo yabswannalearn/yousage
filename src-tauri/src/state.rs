@@ -31,7 +31,11 @@ pub struct Config {
     pub privacy_mode: bool,
     pub history_retention_days: u16,
     pub sessions_enabled: bool,
+    #[serde(default = "existing_install")]
+    pub onboarding_completed: bool,
 }
+
+fn existing_install() -> bool { true }
 
 impl Default for Config {
     fn default() -> Self {
@@ -54,6 +58,7 @@ impl Default for Config {
             privacy_mode: false,
             history_retention_days: 30,
             sessions_enabled: false,
+            onboarding_completed: false,
         }
     }
 }
@@ -72,6 +77,7 @@ pub struct Settings {
     pub privacy_mode: bool,
     pub history_retention_days: u16,
     pub sessions_enabled: bool,
+    pub onboarding_completed: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -172,6 +178,7 @@ impl AppState {
                 privacy_mode: config.privacy_mode,
                 history_retention_days: config.history_retention_days,
                 sessions_enabled: config.sessions_enabled,
+                onboarding_completed: config.onboarding_completed,
             },
             health,
             auto_switch: fs::read(directory.join("auto-switch-state.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default(),
@@ -963,6 +970,37 @@ pub fn update_usage_preferences(app: AppHandle, preferences: UsagePreferences) -
 }
 
 #[tauri::command]
+pub fn finish_onboarding(app: AppHandle, providers: Option<Vec<String>>) -> Result<(), String> {
+    let supported = ["codex", "antigravity", "claude"];
+    let state = app.state::<AppState>();
+    let _persist = state.persist_guard.lock().unwrap();
+    let mut config = state.config.lock().unwrap();
+    if config.onboarding_completed { return Ok(()); }
+    let mut next = config.clone();
+    if let Some(providers) = providers {
+        if providers.is_empty() || providers.iter().any(|provider| !supported.contains(&provider.as_str())) {
+            return Err("Choose at least one supported provider.".into());
+        }
+        next.notch_source = providers[0].clone();
+        next.hidden_providers = supported.into_iter().filter(|provider| !providers.iter().any(|chosen| chosen == provider)).map(str::to_owned).collect();
+    }
+    next.onboarding_completed = true;
+    let bytes = serde_json::to_vec_pretty(&next).map_err(|_| "Could not save setup.")?;
+    atomic_write(&state.directory.join("settings.json"), &bytes)?;
+    {
+        let mut snapshot = state.snapshot.lock().unwrap();
+        snapshot.settings.onboarding_completed = true;
+        snapshot.settings.notch_source = next.notch_source.clone();
+        snapshot.settings.hidden_providers = next.hidden_providers.clone();
+    }
+    *config = next;
+    drop(config);
+    drop(_persist);
+    state.emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub fn update_settings(
     app: AppHandle,
     start_with_windows: bool,
@@ -1015,6 +1053,14 @@ pub fn update_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_opens_for_new_installs_and_respects_existing_settings() {
+        assert!(!Config::default().onboarding_completed);
+        assert!(serde_json::from_str::<Config>("{}").unwrap().onboarding_completed);
+        let pending = serde_json::to_string(&Config::default()).unwrap();
+        assert!(!serde_json::from_str::<Config>(&pending).unwrap().onboarding_completed);
+    }
 
     #[test]
     fn existing_settings_gain_visible_subscriptions_and_default_colors() {

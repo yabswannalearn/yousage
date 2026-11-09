@@ -32,6 +32,7 @@ fn main() {
             state::check_for_updates, state::open_release_url,
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings, state::update_usage_preferences,
+            state::finish_onboarding,
             state::set_privacy_mode,
             notifications::get_notification_status, state::open_notification_settings,
             history::get_usage_history, history::export_usage_history, history::clear_usage_history, history::update_history_settings,
