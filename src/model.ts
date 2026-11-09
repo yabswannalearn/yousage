@@ -306,7 +306,7 @@ export interface Snapshot {
   health?: Record<Provider, ProviderHealth>;
   pacing?: Record<string, PacingEstimate>;
   autoSwitch?: Partial<Record<Provider, { message: string; nextAttemptAt: number | null }>>;
-  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number; sessionsEnabled?: boolean; onboardingCompleted?: boolean };
+  settings: { startWithWindows: boolean; refreshSeconds: number; notchSource: string; notificationsEnabled: boolean; providerColors: Record<Provider, string>; hiddenProviders: Provider[]; appTheme: AppTheme; usagePreferences?: UsagePreferences; privacyMode?: boolean; historyRetentionDays?: number; sessionsEnabled?: boolean; onboardingCompleted?: boolean; pausedProviders?: Provider[] };
 }
 
 function privateAccountNames(snapshot: Snapshot): Map<string, string> {

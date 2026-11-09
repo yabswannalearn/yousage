@@ -91,6 +91,8 @@ type SettingsTab = 'all' | 'general' | 'appearance' | 'alerts' | 'system';
 let settingsOpen = false;
 let settingsTab: SettingsTab = 'general';
 let onboardingProviders = new Set<Provider>(['codex']);
+let compactContent: { identity: string; readings: string } | undefined;
+let appliedThemeKey = '';
 let providerFilter: 'all' | Provider = 'all';
 let adding = false;
 let savingAgy = false;
@@ -243,6 +245,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (account) account.label = String(args?.label);
   } else if (command === 'disconnect_account') {
     snapshot.accounts = snapshot.accounts.filter(account => account.id !== args?.id);
+  } else if (command === 'set_provider_tracking') {
+    const provider = args?.provider as Provider;
+    const paused = (snapshot.settings.pausedProviders ?? []).filter(name => name !== provider);
+    snapshot.settings.pausedProviders = args?.enabled ? paused : [...paused, provider];
   } else if (command === 'update_settings') {
     snapshot.settings = {
       ...snapshot.settings,
@@ -285,6 +291,7 @@ function providerLogo(provider: Provider) {
 }
 
 const visible = (provider: Provider) => !snapshot.settings.hiddenProviders.includes(provider);
+const tracking = (provider: Provider) => !snapshot.settings.pausedProviders?.includes(provider);
 const notchSource = () => effectiveNotchSource(snapshot.settings.notchSource, snapshot.settings.hiddenProviders);
 const providerNames: Record<Provider, string> = { codex: 'Codex', antigravity: 'Antigravity', claude: 'Claude' };
 const providerSetup = {
@@ -469,6 +476,9 @@ function historySettings() {
 function connectionHealthSettings() {
   const statusNames = { checking: 'Checking', ready: 'Connected', signInRequired: 'Sign in required', toolMissing: 'Tool missing', rateLimited: 'Rate limited', offline: 'Offline', error: 'Needs attention' };
   return `<div class="settings-pod"><h3>Connection health</h3>${(Object.keys(providerNames) as Provider[]).filter(visible).map(provider => {
+    if (!tracking(provider)) {
+      return `<div class="health-card" ${accentStyle(provider)}><div class="health-heading"><strong>${providerNames[provider]}</strong><span class="health-status">Tracking paused</span></div><p class="fine-print">Resume automatic checks in Settings → Preview, or use Refresh usage to check now.</p></div>`;
+    }
     const fallback = provider === 'codex' ? snapshot.accounts.find(account => isActiveAccount(account, snapshot.accounts, snapshot.activeAccountId)) : snapshot[provider];
     const health = snapshot.health?.[provider];
     const ready = health?.status === 'ready';
@@ -499,12 +509,16 @@ function customPreviewSettings() {
   return `<div class="custom-preview"><div class="preview-providers" role="group" aria-label="Providers in notch">${(Object.keys(providerNames) as Provider[]).map(provider => `<label for="preview-${provider}" ${accentStyle(provider)}><input id="preview-${provider}" type="checkbox" aria-label="${providerNames[provider]} in notch" data-notch-provider="${provider}" ${providers.includes(provider) ? 'checked' : ''}/><span>${providerNames[provider]}${!visible(provider) ? ' · hidden' : ''}</span></label>`).join('')}</div><label class="setting-row" for="notch-window"><span>Preview window</span><select id="notch-window"><option value="limiting" ${prefs.notchWindow === 'limiting' ? 'selected' : ''}>Lowest remaining</option><option value="fiveHour" ${prefs.notchWindow === 'fiveHour' ? 'selected' : ''}>5 hour</option><option value="weekly" ${prefs.notchWindow === 'weekly' ? 'selected' : ''}>Weekly</option></select></label>${snapshot.antigravity.groups.length ? `<label class="setting-row" for="notch-group"><span>Antigravity group</span><select id="notch-group">${snapshot.antigravity.groups.map(item => `<option value="${esc(item.id)}" ${group?.id === item.id ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></label>` : ''}<label class="setting-row" for="smart-notch"><span>Smart auto-focus low allowance</span><input id="smart-notch" class="switch" type="checkbox" ${prefs.smartNotch ? 'checked' : ''}/></label><p class="fine-print">Combine any providers. Lowest remaining shows the tightest allowance for each. Smart auto-focus temporarily promotes low subscriptions.</p></div>`;
 }
 
-const accentStyle = (provider: Provider) => {
+const accentVariables = (provider: Provider) => {
   const color = providerColor(snapshot.settings.providerColors, provider);
-  return `style="--sage:${color};--accent-ink:${readableAccent(color, themePalette(snapshot.settings.appTheme)['--card'])}"`;
+  return `--sage:${color};--accent-ink:${readableAccent(color, themePalette(snapshot.settings.appTheme)['--card'])}`;
 };
+const accentStyle = (provider: Provider) => `style="${accentVariables(provider)}"`;
 
 function applyAppTheme(theme: AppTheme) {
+  const key = `${theme.background}:${theme.accent}`;
+  if (key === appliedThemeKey) return;
+  appliedThemeKey = key;
   const palette = themePalette(theme);
   for (const [property, value] of Object.entries(palette)) root.style.setProperty(property, value);
   for (const element of root.querySelectorAll<HTMLElement>('[style]')) {
@@ -667,11 +681,12 @@ function settingsPanel() {
   const previewPod = `<div class="settings-pod"><div class="settings-heading"><h3>Notch preview</h3><button type="button" class="text-button" data-action="cycle-notch" title="Cycle visible notch preview (Alt+Shift+N)">Cycle source</button></div><label class="setting-row" for="notch-source"><span>Notch preview</span><select id="notch-source"><option value="custom" ${currentSource === 'custom' ? 'selected' : ''}>Custom combination</option><option value="codex" ${!visible('codex') ? 'disabled' : ''} ${currentSource === 'codex' ? 'selected' : ''}>Codex (active account)</option>${bothOptions}${antigravityOptions}${(snapshot.claude.modelLimits ?? []).map(group => `<option value="claude:${esc(group.id)}" ${!visible('claude') ? 'disabled' : ''} ${currentSource === `claude:${group.id}` ? 'selected' : ''}>Claude · ${esc(group.label)}</option>`).join('')}<option value="claude" ${!visible('claude') ? 'disabled' : ''} ${currentSource === 'claude' ? 'selected' : ''}>Claude</option>${effectiveSource === 'none' ? '<option value="none" selected disabled>All subscriptions hidden</option>' : ''}</select></label>${customPreviewSettings()}</div>`;
   const sessionsPod = `<div class="settings-pod"><div class="settings-heading"><h3>Coding sessions</h3><button class="subtle-button" data-action="session-tracking">${settings.sessionsEnabled ? 'Disable session status' : 'Enable session status'}</button></div><p class="fine-print">Show Codex, Claude Code, and Antigravity as Rest, Working, Needs permission, or Finished. Project names, available conversation titles, and status stay on this computer.</p><p class="fine-print">After enabling, review the new hooks in Codex Settings → Hooks (or /hooks), then start new coding sessions.</p></div>`;
   const subscriptionsPod = `<div class="settings-pod subscription-settings"><h3>Subscriptions</h3><p class="fine-print">Show or hide each subscription and choose its color.</p>${subscriptions}</div>`;
+  const trackingPod = `<div class="settings-pod"><h3>Background tracking</h3><p class="fine-print">Pause automatic usage checks, alerts, and account switching for a provider. You can still refresh its reading manually.</p>${(Object.keys(providerNames) as Provider[]).map(provider => `<label class="setting-row" for="track-${provider}"><span>${providerNames[provider]}</span><input id="track-${provider}" class="switch" type="checkbox" data-track-provider="${provider}" aria-label="Track ${providerNames[provider]} in background" ${tracking(provider) ? 'checked' : ''}/></label>`).join('')}</div>`;
   const notificationsPod = `<div class="settings-pod"><h3>Notifications</h3><label class="setting-row" for="notifications"><span>Windows notifications</span><input class="switch" id="notifications" type="checkbox" ${settings.notificationsEnabled ? 'checked' : ''}/></label><div class="setting-row"><span class="fine-print">Low-allowance & reset alerts</span><button type="button" class="subtle-button" data-action="test-notification" ${settings.notificationsEnabled ? '' : 'disabled'}>Send test notification</button></div>${notificationHealthSettings()}</div>`;
   const suggestionsPod = `<div class="settings-pod"><h3>Account suggestions</h3><label class="setting-row" for="recommendation-purpose"><span>Suggest accounts for</span><select id="recommendation-purpose">${(['any', 'work', 'personal'] as const).map(value => `<option value="${value}" ${preferences().recommendationPurpose === value ? 'selected' : ''}>${value === 'any' ? 'Any purpose' : value === 'work' ? 'Work' : 'Personal'}</option>`).join('')}</select></label><p class="fine-print">Set an account’s purpose or exclude it through Manage account. Suggestions use fresh readings and reset times.</p></div>`;
   const privacyPod = `<div class="settings-pod"><h3>Privacy</h3><label class="setting-row" for="privacy-mode"><span>Privacy mode</span><input class="switch" id="privacy-mode" type="checkbox" ${settings.privacyMode ? 'checked' : ''}/></label><p class="fine-print">Hide account names and emails across the app and notifications. Alt+Shift+P toggles privacy anywhere.</p></div>`;
   const appSystemPod = `<div class="settings-pod"><h3>Desktop & updates</h3><label class="setting-row" for="startup"><span>Start with Windows</span><input class="switch" id="startup" type="checkbox" ${settings.startWithWindows ? 'checked' : ''}/></label><label class="setting-row" for="refresh-interval"><span>Refresh usage every</span><select id="refresh-interval">${[[30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']].map(([value, label]) => `<option value="${value}" ${settings.refreshSeconds === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><div class="setting-row update-row"><span>${esc(updateStatusText)}</span>${update.updateAvailable ? `<button type="button" class="subtle-button" data-action="open-release" data-url="${updateUrl}">Install v${esc(update.latestVersion ?? '')}</button>` : `<button type="button" class="subtle-button" data-action="check-updates" ${update.checking ? 'disabled' : ''}>Check updates</button>`}</div><p class="fine-print">Press Alt+Shift+U to toggle the notch · Alt+Shift+N to cycle preview · Alt+Shift+P for privacy.</p></div>`;
-  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${tabBar}<div class="settings-pods">${showSection('appearance') ? appearanceSettings() : ''}${showSection('system') ? privacyPod : ''}${showSection('system') ? historySettings() : ''}${showSection('general') ? previewPod + sessionsPod : ''}${showSection('appearance') || showSection('general') ? subscriptionsPod : ''}${showSection('alerts') ? notificationsPod : ''}${showSection('alerts') ? alertSettings() : ''}${showSection('alerts') ? suggestionsPod : ''}${showSection('general') || showSection('alerts') ? autoSwitchSettings() : ''}${showSection('system') ? connectionHealthSettings() : ''}${showSection('system') || showSection('general') ? appSystemPod : ''}</div></section>`;
+  return `<section class="settings-panel" aria-label="Settings"><div class="settings-heading"><h2>Settings</h2><span class="fine-print">v${esc(update.currentVersion)} · Alt+Shift+U</span></div>${tabBar}<div class="settings-pods">${showSection('appearance') ? appearanceSettings() : ''}${showSection('system') ? privacyPod : ''}${showSection('system') ? historySettings() : ''}${showSection('general') ? previewPod + trackingPod + sessionsPod : ''}${showSection('appearance') || showSection('general') ? subscriptionsPod : ''}${showSection('alerts') ? notificationsPod : ''}${showSection('alerts') ? alertSettings() : ''}${showSection('alerts') ? suggestionsPod : ''}${showSection('general') || showSection('alerts') ? autoSwitchSettings() : ''}${showSection('system') ? connectionHealthSettings() : ''}${showSection('system') || showSection('general') ? appSystemPod : ''}</div></section>`;
 }
 
 function addPanel() {
@@ -739,10 +754,24 @@ function render(autoSync = true) {
   const notchProvider = selected ?? 'codex';
   const showCodexSection = visible('codex') && (providerFilter === 'all' || providerFilter === 'codex');
   root.className = `${expanded ? 'expanded' : ''} ${pinned ? 'pinned' : ''} ${upward ? 'upward' : ''} ${opening ? 'opening' : ''} ${preparingOpen ? 'preparing-open' : ''}`;
+  const identityHtml = firstSession ? `<span class="compact-title">${providerLogo(firstSession.provider)}<span class="session-title">${esc(firstSession.title ?? firstSession.label)}</span>${activeSessions.length > 1 ? `<span class="session-count" aria-label="${activeSessions.length - 1} more sessions">+${activeSessions.length - 1}</span>` : ''}</span><span class="compact-subtitle"><span class="session-state">${sessionStatusLabels[status]}</span></span>` : '';
+  const compactClass = providers.length === 3 ? 'compact three-providers' : 'compact';
+  const compact = root.querySelector<HTMLButtonElement>('#notch-toggle[aria-expanded="false"]');
+  if (!expanded && compact && compactContent) {
+    const attributes = { class: compactClass, 'data-status': status, style: accentVariables(notchProvider), title: notchTooltip };
+    for (const [name, value] of Object.entries(attributes)) {
+      if (compact.getAttribute(name) !== value) compact.setAttribute(name, value);
+    }
+    if (compactContent.identity !== identityHtml) compact.querySelector('.compact-identity')!.innerHTML = identityHtml;
+    if (compactContent.readings !== readingsHtml) compact.querySelector('.compact-readings')!.innerHTML = readingsHtml;
+    compactContent = { identity: identityHtml, readings: readingsHtml };
+    return;
+  }
+  compactContent = { identity: identityHtml, readings: readingsHtml };
   rendering = true;
   const firstRun = snapshot.settings.onboardingCompleted === false;
   const dashboard = !expanded || firstRun ? '' : `${sessionList()}${alertsBanner()}${historyOpen ? historyPanel() : ''}${source === 'none' ? '<div class="empty-state"><h2>All subscriptions hidden</h2><p>Open Settings below to bring a subscription back.</p></div>' : providerFilterBar()}${switchPanel()}${showCodexSection ? `<header class="panel-heading"><div><span class="eyebrow">${preview ? 'PREVIEW DATA' : 'CODEX'}</span><h1>Connected accounts<span class="account-count">${accounts.length}</span></h1></div>${iconButton('refresh', 'refresh', snapshot.refreshing ? 'Refreshing usage' : 'Refresh usage', snapshot.refreshing || snapshot.switching ? 'disabled' : '')}</header>${accounts.map(accountCard).join('')}${accounts.length === 0 ? `<div class="empty-state"><div class="empty-symbol">${icon('plus')}</div><h2>${snapshot.refreshing ? 'Checking your Codex account' : 'Your accounts, in one place'}</h2><p>${esc(snapshot.desktopError ?? 'Sign in to the Codex desktop app, or connect a ChatGPT account below.')}</p></div>` : ''}${!active && snapshot.desktopError && accounts.length ? `<p class="desktop-note">${esc(snapshot.desktopError)}</p>` : ''}${addPanel()}` : ''}${antigravitySection()}${claudeSection()}${settingsOpen ? settingsPanel() : ''}<div class="privacy-note">Stored on this computer. Credentials stay in Windows.</div>`;
-  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} data-status="${status}" class="compact ${providers.length === 3 ? 'three-providers' : ''}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="compact-identity">${firstSession ? `<span class="compact-title">${providerLogo(firstSession.provider)}<span class="session-title">${esc(firstSession.title ?? firstSession.label)}</span>${activeSessions.length > 1 ? `<span class="session-count" aria-label="${activeSessions.length - 1} more sessions">+${activeSessions.length - 1}</span>` : ''}</span><span class="compact-subtitle"><span class="session-state">${sessionStatusLabels[status]}</span></span>` : ''}</span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon(pinned ? 'pin' : 'chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(redact(error || snapshot.login!.error!))}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(redact(notice))}</div>` : ''}${firstRun ? onboardingPanel() : dashboard}</div><footer class="panel-footer">${firstRun ? '<span class="fine-print">Reopen any time from the system tray.</span>' : `${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add Codex account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('history', 'history', 'History & pace', `aria-pressed="${historyOpen}"`)}${iconButton('privacy', 'privacy', 'Toggle privacy mode', `aria-pressed="${Boolean(snapshot.settings.privacyMode)}"`)}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div>`}</footer></section>` : ''}</div>`;
+  root.innerHTML = `<div class="shell"><button id="notch-toggle" ${accentStyle(notchProvider)} data-status="${status}" class="${compactClass}" data-action="toggle" aria-expanded="${expanded}" aria-controls="detail-panel" title="${esc(notchTooltip)}"><span class="compact-identity">${identityHtml}</span><span class="compact-readings">${readingsHtml}</span><span class="expand-icon">${icon(pinned ? 'pin' : 'chevron')}</span></button>${expanded ? `<section id="detail-panel" class="details" aria-label="Usage remaining"><div class="panel-scroll">${error || snapshot.login?.error ? `<div class="error-banner" role="alert">${esc(redact(error || snapshot.login!.error!))}${iconButton('clear-error', 'x', 'Dismiss error')}</div>` : ''}${notice ? `<div class="success-banner" role="status">${esc(redact(notice))}</div>` : ''}${firstRun ? onboardingPanel() : dashboard}</div><footer class="panel-footer">${firstRun ? '<span class="fine-print">Reopen any time from the system tray.</span>' : `${visible('codex') ? `<button class="add-button" type="button" data-action="add" ${snapshot.switching || preparingSwitch || switchPlan || snapshot.login && !snapshot.login.error ? 'disabled' : ''}>${icon('plus')}<span>Add Codex account</span></button>` : `<span class="fine-print">Subscriptions</span>`}<div class="footer-tools">${!visible('codex') ? iconButton('refresh', 'refresh', 'Refresh usage') : ''}${iconButton('history', 'history', 'History & pace', `aria-pressed="${historyOpen}"`)}${iconButton('privacy', 'privacy', 'Toggle privacy mode', `aria-pressed="${Boolean(snapshot.settings.privacyMode)}"`)}${iconButton('settings', 'settings', 'Settings', `aria-pressed="${settingsOpen}"`)}${iconButton('hide', 'hide', 'Hide to system tray')}</div>`}</footer></section>` : ''}</div>`;
   const scroll = root.querySelector('.panel-scroll');
   rendering = false;
   if (scroll) scroll.scrollTop = scrollTop;
@@ -1036,6 +1065,10 @@ root.addEventListener('change', event => {
     const provider = input.dataset.setupProvider as Provider;
     if (input.checked) onboardingProviders.add(provider); else onboardingProviders.delete(provider);
     render();
+    return;
+  }
+  if (input.dataset.trackProvider) {
+    void attempt(() => call('set_provider_tracking', { provider: input.dataset.trackProvider, enabled: input.checked }));
     return;
   }
   if (input.id === 'privacy-mode') { void attempt(() => setPrivacy(input.checked)); return; }

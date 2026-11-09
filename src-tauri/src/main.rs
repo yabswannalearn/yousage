@@ -32,7 +32,7 @@ fn main() {
             state::check_for_updates, state::open_release_url,
             state::connect_account, state::cancel_sign_in, state::dismiss_login_error,
             state::disconnect_account, state::rename_account, state::update_settings, state::update_usage_preferences,
-            state::finish_onboarding,
+            state::finish_onboarding, state::set_provider_tracking,
             state::set_privacy_mode,
             notifications::get_notification_status, state::open_notification_settings,
             history::get_usage_history, history::export_usage_history, history::clear_usage_history, history::update_history_settings,
@@ -51,7 +51,7 @@ fn main() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
-                    state::refresh_all(handle.clone()).await;
+                    state::refresh_scheduled(handle.clone()).await;
                     auto_switch::run(handle.clone()).await;
                     let seconds = handle.state::<state::AppState>().config.lock().unwrap().refresh_seconds;
                     tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;

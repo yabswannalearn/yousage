@@ -51,7 +51,7 @@ Smooth interaction and low background overhead are explicit product requirements
 - Stop interface animation work while hidden and avoid continuous polling or rendering loops when idle.
 - Initial engineering targets are smooth 60 fps interaction on a 60 Hz display and short expansion/collapse animations around 150-200 ms. These are targets to validate, not measured results.
 - Measure interaction timing, idle CPU, and total memory including WebView2 processes in a Windows release build before claiming performance results.
-- See [docs/development.md](development.md#future-plans-resource--performance-optimizations) for the prioritized resource optimization roadmap (WebView2 suspension when hidden, subprocess/RPC cadence reduction, IPC coalescing, dirty-tracked persistence, and runtime thread capping).
+- See [docs/development.md](development.md#background-resource-use) for background tracking behavior and a Windows measurement procedure.
 
 Tauri's documented [process model](https://v2.tauri.app/concept/process-model/) separates the Rust core from interface rendering. Its Windows interface uses [WebView2](https://v2.tauri.app/reference/webview-versions/#webview2-windows).
 

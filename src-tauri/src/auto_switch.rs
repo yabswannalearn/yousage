@@ -50,7 +50,7 @@ fn group<'a>(groups: &'a [AntigravityGroup], source: &str) -> Option<&'a Antigra
 
 fn trigger(snapshot: &Snapshot, provider: &'static str, now: i64) -> Option<Request> {
     let preferences = &snapshot.settings.usage_preferences;
-    if !preferences.auto_switch.enabled(provider) || snapshot.settings.hidden_providers.iter().any(|hidden| hidden == provider) { return None; }
+    if !preferences.auto_switch.enabled(provider) || snapshot.settings.hidden_providers.iter().chain(&snapshot.settings.paused_providers).any(|name| name == provider) { return None; }
     let health = match provider { "codex" => &snapshot.health.codex, "antigravity" => &snapshot.health.antigravity, _ => &snapshot.health.claude };
     if health.status != HealthStatus::Ready { return None; }
     let (identity, selected_group, limits) = match provider {
@@ -194,7 +194,7 @@ mod tests {
             active_account_id: Some("desktop".into()), antigravity: AntigravityStatus { email: Some("work@example.com".into()), groups: vec![group.clone()], updated_at: Some(1000), accounts: vec![AntigravityAccount { id: "agy-personal".into(), email: Some("personal@example.com".into()), groups: vec![AntigravityGroup { weekly: reading(90.0), ..group }], updated_at: Some(1000), ..AntigravityAccount::default() }], ..AntigravityStatus::default() },
             claude: ClaudeStatus { email: Some("work@example.com".into()), five_hour: reading(50.0), weekly: reading(60.0), model_limits: vec![AntigravityGroup { id: "fable".into(), weekly: reading(0.0), ..AntigravityGroup::default() }], updated_at: Some(1000), accounts: vec![ClaudeAccount { id: "claude-personal".into(), email: "personal@example.com".into(), ..ClaudeAccount::default() }], ..ClaudeStatus::default() },
             alerts: vec![], update: Default::default(), refreshing: false, desktop_error: None, login: None, switching: None, health: Health { codex: health.clone(), antigravity: health.clone(), claude: health }, pacing: HashMap::new(), auto_switch: HashMap::new(),
-            settings: Settings { start_with_windows: false, refresh_seconds: 60, notch_source: "both:argon".into(), notifications_enabled: true, provider_colors: Default::default(), hidden_providers: vec![], app_theme: Default::default(), usage_preferences: preferences, privacy_mode: false, history_retention_days: 30, sessions_enabled: false, onboarding_completed: true },
+            settings: Settings { start_with_windows: false, refresh_seconds: 60, notch_source: "both:argon".into(), notifications_enabled: true, provider_colors: Default::default(), hidden_providers: vec![], paused_providers: vec![], app_theme: Default::default(), usage_preferences: preferences, privacy_mode: false, history_retention_days: 30, sessions_enabled: false, onboarding_completed: true },
         }
     }
     #[test]
@@ -279,6 +279,9 @@ mod tests {
         assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(false));
         snapshot.settings.usage_preferences.auto_switch.force_close_confirmed = true;
         assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(true));
+        snapshot.settings.paused_providers.push("codex".into());
+        assert!(authorize_snapshot(&snapshot, &request, &available, 1000).is_err());
+        snapshot.settings.paused_providers.clear();
         snapshot.settings.usage_preferences.auto_switch.codex = false;
         assert!(authorize_snapshot(&snapshot, &request, &available, 1000).is_err());
         snapshot.settings.usage_preferences.auto_switch.codex = true;

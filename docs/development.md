@@ -72,25 +72,13 @@ Usage preferences are stored under `usagePreferences` in settings and exposed th
 
 `src-tauri/src/usage.rs` contains preference validation, alert observations, and connection-health types. Quiet hours use Windows local time. Alert observations and provider health are persisted locally; suppression still advances notification observations to avoid a backlog. History and pacing live in src-tauri/src/history.rs. Local bounded JSON stores successful samples using hashed identities and generic aliases, with five-minute sampling and hourly compaction after seven days. Unchanged history is not rewritten. Forecasts require recent monotonic samples in the same reset window; failed, stale, sparse, or discontinuous observations suppress estimates. Retention supports 7/30/90 days. CSV export honors privacy mode and escapes formula-leading labels.
 
-## Future plans: Resource & performance optimizations
+## Background resource use
 
-Live measurements on Windows show the Rust host (`yousage.exe`) uses ~7 MB of private memory, while the embedded Chromium WebView2 process tree accounts for 90%+ of the total memory footprint (~150–400 MB working set). Planned optimizations ordered by impact:
+Scheduled checks skip paused providers. Manual refresh and account-management actions can still check them on demand. The first check after launch includes saved accounts. Later scheduled Codex and Antigravity checks run for active accounts every refresh interval and for inactive saved accounts at most once every five minutes. Claude keeps its own retry and rate-limit policy.
 
-1. **WebView2 memory suspension & browser flags**:
-   - Call WebView2 `TrySuspend` (`ICoreWebView2_3::TrySuspend`) when the notch is hidden to the system tray (`hide_notch`) so the renderer working set drops to a few megabytes while Rust background polling and native WinRT toast notifications continue uninterrupted.
-   - Pass `--disable-features=Translate,msWebOOUI,msPdfOOUI --js-flags=--lite-mode` via `additionalBrowserArgs` in `src-tauri/tauri.conf.json` to trim unused Chromium subsystem overhead.
-2. **Subprocess & RPC cadence optimization**:
-   - Cache verified account `identity` across polls in `read_account` until credentials change, eliminating the extra `getAuthStatus` JSON-RPC roundtrip on every poll.
-   - Poll the active account at `refresh_seconds` (e.g., 60s) and slow-poll non-active connected Codex/Antigravity profiles (e.g., every 5–10 minutes or on detail-panel expansion), cutting background subprocess spawns by 60–80%.
-   - Add adaptive idle backoff (stepping polling from 60s toward 300s when usage remains unchanged for 30+ minutes or the session is locked).
-3. **IPC & DOM render coalescing**:
-   - Batch intermediate state updates across `refresh_codex` and `refresh_antigravity` so `state.emit()` fires twice per refresh cycle (start and completion) instead of 6–10+ times, avoiding repeated `Snapshot` clones, system tray rebuilds (`update_tray`), and full `root.innerHTML` passes while the notch is collapsed.
-   - Short-circuit `render()` when `expanded === false` so collapsed updates only touch compact notch bindings.
-4. **Dirty-tracked disk persistence**:
-   - Split `AppState::persist` into targeted or dirty-tracked writes so routine 60s refresh cycles only write cache files that changed, rather than rewriting `settings.json` and `alert-state.json` on every poll.
-5. **Tokio thread pool & release binary size**:
-   - Cap the Tokio runtime worker threads to 2 instead of defaulting to one thread per logical CPU core.
-   - Use `lto = true` and `opt-level = "s"` (or `"z"`) in `src-tauri/Cargo.toml` `[profile.release]` to reduce the standalone executable size by ~15–25%.
+Provider usage checks publish a start and completion snapshot. The collapsed notch keeps its existing controls and updates changed readings or session text. Tray updates compare the tooltip and attention state before setting them. Persistence skips identical settings, usage caches, and alert data. The Windows pointer watcher waits 500 ms while hidden and checks visible pointer movement every 40 ms to keep the dwell responsive.
+
+To measure a Windows release build on modest hardware, use a clean Windows user on a 4 GB PC or VM. Record the time from launch to usable dashboard, the time from hover to expanded panel, and the process-tree private memory after one minute. Then hide the notch to the tray and sample CPU time, private memory, and child process starts over at least ten minutes. Repeat with one signed-in provider and several saved accounts, then pause that provider and repeat. Include WebView2 descendants and label the Windows and WebView2 versions. Compare to the same workload on the previous build before deciding whether to suspend the hidden WebView.
 
 ## Hover, session status, and Claude switching
 
