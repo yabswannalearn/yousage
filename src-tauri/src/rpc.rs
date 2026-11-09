@@ -46,7 +46,7 @@ impl Rpc {
         let input = child.stdin.take().ok_or("Codex input is unavailable.")?;
         let output = BufReader::new(child.stdout.take().ok_or("Codex output is unavailable.")?).lines();
         let mut rpc = Self { _child: child, input, output, next_id: 0, login_result: None };
-        rpc.request("initialize", json!({"clientInfo":{"name":"yousage","title":"YouSage","version":"0.1.0"}})).await?;
+        rpc.request("initialize", json!({"clientInfo":{"name":"yousage","title":"YouSage","version":env!("CARGO_PKG_VERSION")}})).await?;
         rpc.send(json!({"method":"initialized","params":{}})).await?;
         Ok(rpc)
     }

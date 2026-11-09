@@ -59,7 +59,7 @@ let snapshot: Snapshot = {
   antigravity: { email: null, groups: [], accounts: [], updatedAt: null, error: null },
   claude: { email: null, plan: null, fiveHour: null, weekly: null, updatedAt: null, error: null },
   alerts: [],
-  update: { currentVersion: '0.1.0', latestVersion: null, releaseUrl: null, installerUrl: null, updateAvailable: false, checking: false, error: null },
+  update: { currentVersion: '0.2.0', latestVersion: null, releaseUrl: null, installerUrl: null, updateAvailable: false, checking: false, error: null },
   refreshing: false,
   desktopError: null,
   login: null,
@@ -234,7 +234,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } else if (command === 'disconnect_antigravity_account') {
     snapshot.antigravity.accounts = (snapshot.antigravity.accounts ?? []).filter(a => a.id !== args?.id || a.active);
   } else if (command === 'check_for_updates') {
-    snapshot.update = { ...snapshot.update, latestVersion: '0.1.0', updateAvailable: false, checking: false, error: null };
+    snapshot.update = { ...snapshot.update, latestVersion: snapshot.update.currentVersion, updateAvailable: false, checking: false, error: null };
   } else if (command === 'open_release_url') {
     window.open(String(args?.url ?? 'https://github.com/yabswannalearn/yousage/releases/latest'), '_blank', 'noopener');
   } else if (command === 'rename_account') {
@@ -472,13 +472,13 @@ function connectionHealthSettings() {
 }
 
 function autoSwitchSettings() {
-  const automatic = preferences().autoSwitch ?? { codex: false, antigravity: false, claude: false, sessions: 'close' };
+  const automatic = preferences().autoSwitch ?? { codex: false, antigravity: false, claude: false, sessions: 'wait' };
   const rows = (['codex', 'antigravity', 'claude'] as const).map(provider => {
     const count = provider === 'codex' ? snapshot.accounts.filter(account => !account.desktop).length : provider === 'antigravity' ? (snapshot.antigravity.accounts ?? []).filter(account => account.id !== 'active').length : snapshot.claude.accounts?.length ?? 0;
     const status = automatic[provider] ? snapshot.autoSwitch?.[provider] : null;
     return `<div class="auto-switch-provider"><label class="setting-row" for="auto-switch-${provider}"><span>${providerNames[provider]}<span class="fine-print">${count} saved account${count === 1 ? '' : 's'}</span></span><input class="switch" id="auto-switch-${provider}" type="checkbox" aria-label="Auto switch ${providerNames[provider]}" data-auto-switch="${provider}" ${automatic[provider] ? 'checked' : ''}/></label>${automatic[provider] ? `<p class="fine-print" role="status">${esc(status?.message ?? 'Watching for 0% remaining.')}${status?.nextAttemptAt && status.nextAttemptAt > Date.now() / 1000 ? ` Next attempt ${esc(retryLabel(status.nextAttemptAt))}.` : ''}</p>` : ''}</div>`;
   }).join('');
-  return `<div class="settings-pod auto-switch-settings"><h3>Auto switch account</h3><p class="fine-print">At 0% remaining, use another saved account with available allowance. Account purpose and exclusions also apply here.</p>${rows}<label class="setting-row" for="auto-switch-sessions"><span>Open coding sessions</span><select id="auto-switch-sessions"><option value="wait" ${automatic.sessions === 'wait' ? 'selected' : ''}>Wait until sessions close</option><option value="close" ${automatic.sessions === 'close' ? 'selected' : ''}>Close sessions and switch</option></select></label>${automatic.sessions === 'close' ? '<p class="auto-switch-warning">Enabling a provider allows YouSage to force-close its apps and related terminal sessions at 0%. Tasks stop and unsaved work can be lost. Desktop apps reopen; start new terminal sessions yourself.</p>' : '<p class="fine-print">Waits for the affected apps and terminal sessions to close before switching.</p>'}<p class="fine-print">Antigravity follows your notch model group. Selecting Fable also monitors its separate weekly allowance. Switching is checked in the background, even when the notch is hidden.</p></div>`;
+  return `<div class="settings-pod auto-switch-settings"><h3>Auto switch account</h3><p class="fine-print">At 0% remaining, use another saved account with available allowance. Account purpose and exclusions also apply here.</p>${rows}<label class="setting-row" for="auto-switch-sessions"><span>Open coding sessions</span><select id="auto-switch-sessions"><option value="wait" ${automatic.sessions === 'wait' ? 'selected' : ''}>Wait until sessions close</option><option value="close" ${automatic.sessions === 'close' ? 'selected' : ''}>Force-close sessions and switch</option></select></label>${automatic.sessions === 'close' ? '<p class="auto-switch-warning">Enabling a provider allows YouSage to force-close its apps and related terminal sessions at 0%. Tasks stop and unsaved work can be lost. Desktop apps reopen; start new terminal sessions yourself.</p>' : '<p class="fine-print">Waits for the affected apps and terminal sessions to close before switching.</p>'}<p class="fine-print">Antigravity follows your notch model group. Selecting Fable also monitors its separate weekly allowance. Switching is checked in the background, even when the notch is hidden.</p></div>`;
 }
 
 function alertSettings() {
@@ -1004,8 +1004,11 @@ root.addEventListener('change', event => {
   if (input.id === 'privacy-mode') { void attempt(() => setPrivacy(input.checked)); return; }
   if (input.id === 'smart-notch') { void attempt(() => savePreferences({ ...preferences(), smartNotch: input.checked })); return; }
   if (input.dataset.autoSwitch || input.id === 'auto-switch-sessions') {
-    const automatic = preferences().autoSwitch ?? { codex: false, antigravity: false, claude: false, sessions: 'close' as const };
-    const next = input.dataset.autoSwitch ? { ...automatic, [input.dataset.autoSwitch]: input.checked } : { ...automatic, sessions: input.value as 'wait' | 'close' };
+    const automatic = preferences().autoSwitch ?? { codex: false, antigravity: false, claude: false, sessions: 'wait' as const };
+    const forceCloseConfirmed = input.value === 'close';
+    const next = input.dataset.autoSwitch
+      ? { ...automatic, [input.dataset.autoSwitch]: input.checked }
+      : { ...automatic, sessions: forceCloseConfirmed ? 'close' as const : 'wait' as const, forceCloseConfirmed };
     void attempt(() => savePreferences({ ...preferences(), autoSwitch: next }));
     return;
   }

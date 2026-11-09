@@ -20,6 +20,8 @@ YouSage runs on Windows 10 and 11 x64 with Microsoft Edge WebView2. Download the
 
 This README describes `main`. The `v0.1.0` installer predates Fable, coding session status, and automatic switching. Build from source to use those features.
 
+To verify a download, compare its SHA-256 hash against the digest listed for that asset on GitHub Releases. In PowerShell, run `Get-FileHash .\yousage.exe -Algorithm SHA256`, substituting the filename you downloaded. Releases currently use unsigned Windows binaries. See the [security policy](SECURITY.md) for private vulnerability reports.
+
 ## Connect your accounts
 
 Install and sign in to the tools for the providers you want to track.
@@ -49,7 +51,7 @@ Use the switch action on a saved account and review which sessions need to close
 
 **Auto switch account** is off by default. Enable it per provider in **Settings → Preview** or **Settings → Alerts**. YouSage requires a fresh 0% reading and a saved account with available allowance in the same quota windows. Account purpose and exclusions apply to the choice.
 
-Choose **Wait until sessions close** to defer switching while coding sessions are open. **Close sessions and switch** is the default policy when you enable auto switch and can interrupt running work or discard unsaved changes.
+Automatic switching defaults to **Wait until sessions close**. Choose **Force-close sessions and switch** separately if you accept the risk of interrupting running work or losing unsaved changes. Existing settings require this choice again.
 
 ### Local data and privacy
 

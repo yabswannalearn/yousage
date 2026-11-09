@@ -121,6 +121,7 @@ fn classify(processes: &[Process], own_pid: u32, desktop_paths: &HashSet<PathBuf
             if desktop_ids.contains(&candidate.process_id) {
                 root = candidate;
             } else if is_shell(&candidate.name) && !protected.contains(&candidate.process_id) {
+                if parents.iter().any(|(&child, &parent)| parent == candidate.process_id && child != root.process_id) { break }
                 root = candidate;
             } else if is_cli_shim(candidate, provider) && !protected.contains(&candidate.process_id) {
                 root = candidate;
@@ -305,6 +306,19 @@ mod tests {
         assert_eq!(ids, HashSet::from([2, 7]));
         assert!(runtime.cli_running);
         assert!(!runtime.contains_own_ancestor);
+    }
+
+    #[test]
+    fn shared_shell_survives_when_another_child_is_running() {
+        let processes = vec![
+            process(1, 0, "WindowsTerminal.exe", "terminal"),
+            process(2, 1, "pwsh.exe", "pwsh"),
+            process(3, 2, "codex.exe", "codex resume"),
+            process(4, 2, "node.exe", "node local-server.js"),
+        ];
+        let runtime = classify(&processes, 50, &HashSet::new(), Provider::Codex);
+        let ids: Vec<_> = runtime.targets.iter().map(|p| p.process_id).collect();
+        assert_eq!(ids, vec![3]);
     }
 
     #[test]
