@@ -4,7 +4,7 @@
 
 YouSage is a Windows desktop notch for tracking **OpenAI Codex**, **Google Antigravity**, and **Claude Code** allowances. See how much usage you have left, when it resets, and which coding session is working.
 
-[Download for Windows](https://github.com/yabswannalearn/yousage/releases/latest) · [Build from source](#build-from-source) · [Report an issue](https://github.com/yabswannalearn/yousage/issues)
+[Download for Windows](https://github.com/yabswannalearn/yousage/releases/latest) · [Try the browser demo](https://yabswannalearn.github.io/yousage/?preview=1&expanded=1) · [Build from source](#build-from-source) · [Report an issue](https://github.com/yabswannalearn/yousage/issues)
 
 ## Features
 
@@ -25,10 +25,11 @@ To verify a download, compare its SHA-256 hash against the digest listed for tha
 ## Connect your accounts
 
 Install and sign in to the tools for the providers you want to track.
+The dashboard opens on first launch so you can choose those providers and see their setup steps. Select **Open dashboard** in the Windows system tray to return at any time.
 
 | Provider | Setup |
 | --- | --- |
-| Codex | Sign in to Codex on this PC. YouSage detects the active sign-in. Use **Add account** to connect additional ChatGPT accounts through your browser. |
+| Codex | Sign in to Codex on this PC. YouSage detects the active sign-in. Use **Add Codex account** to connect additional ChatGPT accounts through your browser. |
 | Antigravity | Install and sign in to the `agy` CLI. YouSage reads its model quotas. Use **Save sign-in** to keep an account available before signing in to another. |
 | Claude Code | Run `claude auth login` to sign in to a Claude subscription. Use **Save sign-in** to keep an account available before signing in to another. YouSage uses the Claude Code sign-in for usage and switching. |
 

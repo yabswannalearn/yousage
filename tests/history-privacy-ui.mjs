@@ -98,6 +98,7 @@ try {
   assert.match(Buffer.concat(chunks).toString(), /Codex account 1/);
   assert.doesNotMatch(Buffer.concat(chunks).toString(), /Acme research/);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('[data-tab="all"]').click();
   await page.locator('#history-retention').selectOption('7');
   await page.waitForFunction(() => window.testBridge.snapshot.settings.historyRetentionDays === 7);
   await page.getByRole('button', { name: 'Send test notification', exact: true }).click();

@@ -26,6 +26,7 @@ jobs:
       - run: npm run build
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: npx playwright install chromium
+      - run: node tests/browser-preview-ui.mjs
       - name: Exercise the desktop interface
         shell: pwsh
         run: |

@@ -141,6 +141,30 @@
 #app[data-edge=bottom]:not(.expanded) .shell{margin-top:auto;border-radius:10px 10px 0 0}
 #app:is([data-edge=left],[data-edge=right]):not(.expanded) .shell{width:100%;height:100%}
 #app:not(.expanded){pointer-events:none}
+.browser-landing{background:#202221}
+.browser-landing body{display:grid;place-items:center}
+.browser-landing #app{width:min(100%,440px);height:auto;pointer-events:auto;user-select:text}
+.browser-message{border:1px solid var(--line);padding:26px;display:grid;gap:14px}
+.browser-message h1{font-size:26px}
+.browser-message p{margin:0;font-size:14px;color:var(--muted)}
+.browser-message a{font-size:13px;padding-block:6px}
+.browser-preview body:before{content:"YouSage · Demo data";inset:14px auto auto 16px}
+.details .fine-print,.details .account-error,.details .desktop-note,.details .empty-state p{font-size:11px}
+.details .setting-row,.details .subscription-toggle{font-size:12px}
+.details .settings-tabs button,.details .provider-filter button{font-size:11px;min-height:30px}
+.details .icon-button{width:32px;height:32px}
+.details .subtle-button,.details .add-button{font-size:11px;min-height:30px}
+.onboarding{padding:8px 0 16px}
+.onboarding h1{font-size:21px}
+.onboarding>p{font-size:12px;color:var(--muted);line-height:1.5;margin:6px 0 14px}
+.setup-providers{display:grid;gap:8px;margin-bottom:14px}
+.setup-provider{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);cursor:pointer}
+.setup-provider:has(input:checked){border-color:color-mix(in srgb,var(--sage) 48%,var(--line))}
+.setup-provider .provider-logo{width:21px;height:21px;justify-self:center}
+.setup-provider strong{display:block;font-size:13px;margin-bottom:3px}
+.setup-provider span span{display:block;color:var(--muted);font-size:11px;line-height:1.45}
+.setup-skip{display:block;margin:5px auto 0;min-height:32px;font-size:11px}
+.provider-recovery{margin-top:9px}
 .compact{height:44px;min-height:44px;padding:5px 10px;gap:8px}
 #app:is([data-edge=top],[data-edge=bottom]) .compact{height:26px;min-height:26px;padding:2px 8px;gap:6px}
 .provider-meter{position:relative;display:inline-grid;place-items:center;width:26px;height:26px;flex:none}

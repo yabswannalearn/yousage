@@ -17,6 +17,14 @@ await page.addInitScript(() => {
     alerts: [], update: { currentVersion: '0.1.0', updateAvailable: false }, refreshing: false, desktopError: null, login: null, switching: null,
     settings: { startWithWindows: true, refreshSeconds: 60, notchSource: 'both:gemini', notificationsEnabled: true, providerColors: { codex: '#b7c8b1', antigravity: '#8ab4d8', claude: '#d99a7c' }, hiddenProviders: [] },
   };
+  if (new URLSearchParams(location.search).has('firstRun')) {
+    snapshot.settings.onboardingCompleted = false;
+    snapshot.settings.notchSource = 'codex';
+    snapshot.accounts = [];
+    snapshot.activeAccountId = null;
+    snapshot.antigravity = { email: null, groups: [], accounts: [], updatedAt: null, error: null };
+    snapshot.claude = { email: null, fiveHour: null, weekly: null, updatedAt: null, error: null };
+  }
   const callbacks = new Map();
   const events = new Map();
   window.isTauri = true;
@@ -33,6 +41,14 @@ await page.addInitScript(() => {
       window.testBridge.calls.push({ command, args });
       if (command === 'plugin:event|listen') { events.set(args.event, args.handler); return args.handler; }
       if (command === 'get_snapshot') return structuredClone(snapshot);
+      if (command === 'finish_onboarding') {
+        snapshot.settings.onboardingCompleted = true;
+        if (args.providers) {
+          snapshot.settings.notchSource = args.providers[0];
+          snapshot.settings.hiddenProviders = ['codex', 'antigravity', 'claude'].filter(provider => !args.providers.includes(provider));
+        }
+        window.testBridge.emit('usage-updated', snapshot);
+      }
       if (command === 'prepare_switch' || command === 'prepare_antigravity_switch') {
         const antigravity = command === 'prepare_antigravity_switch';
         if (window.testBridge.noSessions) return { id: args.id, label: 'Work', provider: 'codex', desktopRunning: false, cliRunning: false, processNames: [] };
@@ -112,6 +128,11 @@ try {
   await header.click();
   await page.waitForTimeout(250);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await page.locator('[data-tab="general"]').getAttribute('aria-pressed'), 'true');
+  await page.locator('[data-tab="system"]').focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('[data-tab="system"]').evaluate(el => el === document.activeElement), true);
+  await page.locator('[data-tab="all"]').click();
   await page.getByLabel('App background', { exact: true }).fill('#e9e4ff');
   await page.getByLabel('UI accent', { exact: true }).fill('#8b45ce');
   assert.equal(await page.locator('.shell').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(233, 228, 255)');
@@ -363,6 +384,10 @@ try {
   await page.locator('[data-action="filter-provider"][data-provider="claude"]').click();
   assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 1);
   assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 0);
+  await page.getByRole('button', { name: 'Add Codex account', exact: true }).click();
+  assert.equal(await page.locator('#account-label').evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('[data-action="filter-provider"][data-provider="codex"]').getAttribute('aria-pressed'), 'true');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.locator('[data-action="filter-provider"][data-provider="all"]').click();
   assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 1);
   await page.evaluate(() => {
@@ -379,6 +404,22 @@ try {
   assert.equal(await page.locator('[data-action="clear-alerts"]').count(), 0);
   await page.evaluate(() => window.testBridge.emit('hotkey-cycle-notch'));
   await page.waitForFunction(() => window.testBridge.snapshot.settings.notchSource !== 'codex');
+  await page.goto('http://127.0.0.1:1420/?firstRun=1');
+  await page.getByRole('heading', { name: 'Choose what to track' }).waitFor();
+  await page.waitForFunction(() => document.getElementById('onboarding-title') === document.activeElement);
+  if (process.env.YOUSAGE_UI_SCREENSHOT) await page.screenshot({ path: process.env.YOUSAGE_UI_SCREENSHOT.replace(/\.png$/, '-setup.png') });
+  await page.getByRole('checkbox', { name: 'Track Codex' }).uncheck();
+  assert.equal(await page.getByRole('button', { name: 'Open dashboard' }).isDisabled(), true);
+  await page.getByRole('checkbox', { name: 'Track Claude' }).check();
+  await page.getByRole('button', { name: 'Open dashboard' }).click();
+  assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'finish_onboarding').args.providers), ['claude']);
+  assert.equal(await page.getByRole('region', { name: 'Claude usage' }).count(), 1);
+  assert.equal(await page.getByRole('heading', { name: 'Choose what to track' }).count(), 0);
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('#notch-toggle').getAttribute('aria-expanded') === 'false');
+  await page.evaluate(() => window.testBridge.emit('tray-open-dashboard'));
+  await page.getByRole('region', { name: 'Claude usage' }).waitFor();
+  assert.equal(await page.locator('#app').evaluate(el => el.classList.contains('pinned')), true);
   assert.deepEqual(failures, []);
   console.log('Desktop UI passed: drag, themes, custom provider/window previews, preference persistence and validation, cooldown health and recovery, Codex/Antigravity filtered suggestions and confirmed switching.');
 } finally { await browser.close(); }
