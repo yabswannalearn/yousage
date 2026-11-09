@@ -29,7 +29,8 @@ test('Claude Fable selects its weekly limit independently and retains its prefer
 test('automatic switching is opt-in and keeps provider choices, session policy, and Claude exclusions', () => {
   assert.equal(usagePreferences().autoSwitch, undefined);
   const preferences = usagePreferences({ usagePreferences: { autoSwitch: { codex: true, antigravity: false, claude: true, sessions: 'close' }, accountPreferences: { 'claude:personal': { purpose: 'work', excludeFromSuggestions: true } } } });
-  assert.deepEqual(preferences.autoSwitch, { codex: true, antigravity: false, claude: true, sessions: 'close' });
+  assert.deepEqual(preferences.autoSwitch, { codex: true, antigravity: false, claude: true, sessions: 'wait' });
+  assert.equal(usagePreferences({ usagePreferences: { autoSwitch: { sessions: 'close', forceCloseConfirmed: true } } }).autoSwitch?.sessions, 'close');
   assert.deepEqual(preferences.accountPreferences['claude:personal'], { purpose: 'work', excludeFromSuggestions: true });
   assert.deepEqual(usagePreferences({ usagePreferences: { autoSwitch: { codex: 'true', sessions: 'unknown' } } }).autoSwitch, { codex: false, antigravity: false, claude: false, sessions: 'wait' });
 });

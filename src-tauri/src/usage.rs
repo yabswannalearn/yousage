@@ -19,7 +19,7 @@ pub struct AccountPreference {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub enum AutoSwitchSessions { Wait, #[default] Close }
+pub enum AutoSwitchSessions { #[default] Wait, Close }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -28,9 +28,14 @@ pub struct AutoSwitch {
     pub antigravity: bool,
     pub claude: bool,
     pub sessions: AutoSwitchSessions,
+    pub force_close_confirmed: bool,
 }
 
 impl AutoSwitch {
+    pub fn closes_sessions(&self) -> bool {
+        self.sessions == AutoSwitchSessions::Close && self.force_close_confirmed
+    }
+
     pub fn enabled(&self, provider: &str) -> bool {
         match provider { "codex" => self.codex, "antigravity" => self.antigravity, "claude" => self.claude, _ => false }
     }

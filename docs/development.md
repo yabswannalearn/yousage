@@ -1,31 +1,17 @@
 # Windows development setup
 
-The user approved installing Rust/Cargo and the minimal Microsoft C++ compiler and Windows SDK, with D: as the primary location. Only Microsoft components that require the system drive may use C:. Ask before installing additional system tools.
-
-## Locations on this machine
-
-- Rustup: `D:\DevTools\Rust\rustup`
-- Cargo, its package registry, and binaries: `D:\DevTools\Rust\cargo`
-- MSVC Build Tools: `D:\DevTools\VS2022BuildTools`
-- Shared Visual Studio components: `D:\DevTools\VisualStudio\Shared`
-- Microsoft download cache: `D:\DevTools\Cache\VisualStudio`
-- Installer downloads: `D:\DevTools\Downloads`
-- Build-process temporary files: `D:\DevTools\Temp`
-- Project frontend dependencies and Rust build output stay under the project on D:.
-
-Cargo and Rustup locations are configured as Windows user environment variables; Cargo's bin directory is on the user PATH. Existing terminals can load these values using `. ./scripts/tools.ps1`.
-
-Setup completed on October 17, 2026 without requiring a restart. Installed versions: Rust 1.99.1 (MSVC), Cargo 1.99.1, Visual Studio Build Tools 2022 17.14.42, and Windows SDK 10.0.26100.0. After installation, the main tool folders measured approximately 4 GB on D: and 1.8 GB on C:; project build output is additional. Microsoft installed the Windows SDK and installer in their standard system locations on C:.
-
-## Commands
+Install Git, Node.js 22.12 or newer, the Rust MSVC toolchain, Visual Studio Build Tools with Desktop development with C++, and the Windows SDK. YouSage uses the Microsoft Edge WebView2 Runtime. See the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows) for component selection. Run the commands below from the checkout in a fresh PowerShell session.
 
 ```powershell
-. ./scripts/tools.ps1
-npm install
+npm ci
 npm run tauri dev
 ```
 
-To build the standalone executable, use `npm run build:desktop`. To additionally build an installer, use `npm run tauri build`. For verification, use `npm test`, `npm run build`, and `cargo test --manifest-path src-tauri/Cargo.toml`.
+Build the standalone executable with `npm run build:desktop` or include the NSIS installer with `npm run tauri build`. The Windows CI workflow runs the frontend build, TypeScript and Rust tests, and browser walkthroughs on pull requests.
+
+The release workflow runs `tests/installer-smoke.ps1` on a clean Windows runner. It installs the published v0.1.0 package, launches it, upgrades to the candidate package, checks that local data survived, and uninstalls it. The workflow accepts a manual dispatch for an installer check before tagging.
+
+Keep the standalone executable and installer signed with the same trusted publisher identity once a signing identity is available. Configure [Tauri Windows signing](https://v2.tauri.app/distribute/sign/windows/) in the release workflow, then verify both final artifacts with `Get-AuthenticodeSignature` before upload. Review the [SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) when rolling out signed builds.
 
 ## Integration
 
@@ -78,7 +64,7 @@ This opt-in Windows test creates a disposable Codex home and a dummy API credent
 
 Antigravity's background updater launches `agy --version` in a new console during quota checks. On systems using Windows Terminal as the default terminal, a separate brokered terminal window can appear even when the CLI's own console is hidden. Usage checks set the process-local environment variable `AGY_CLI_DISABLE_AUTO_UPDATE=true` (the literal `true` is required; `1` does not work). Normal interactive CLI sessions and their updates are unchanged. Usage polling launches agy directly with `CREATE_NO_WINDOW`; the previous PowerShell/cmd wrapper and its Job Object were removed. Authentication isolation and refresh behavior are unchanged.
 
-For a Windows integration regression, run `./tests/console-windows.ps1 -AppPath D:/Apps/YouSage/yousage.exe -RestartApp`. This restarts only the named executable, observes its process tree and actual console/Windows Terminal show events for 80 seconds, and fails on internal agy updater children or visible console events correlated with background CLI launches. Keep the desktop otherwise idle so unrelated terminal launches are not mistaken for the app's. The test uses existing sign-ins for normal quota checks; it does not switch accounts. The older synthetic hidden-console inheritance test did not cover Windows Terminal delegation and has been removed.
+For a Windows integration regression, run `./tests/console-windows.ps1 -AppPath ./src-tauri/target/release/yousage.exe -RestartApp`. This restarts only the named executable, observes its process tree and actual console/Windows Terminal show events for 80 seconds, and fails on internal agy updater children or visible console events correlated with background CLI launches. Keep the desktop otherwise idle so unrelated terminal launches are not mistaken for the app's. The test uses existing sign-ins for normal quota checks; it does not switch accounts. The older synthetic hidden-console inheritance test did not cover Windows Terminal delegation and has been removed.
 
 Circular meters replace compact and detail allowance tracks. Compact readings include reset countdowns, updated in place every 30 seconds without replacing controls; tooltips and detail cards show full reset times. Unknown usage stays a dash with an empty ring.
 
@@ -120,7 +106,7 @@ Claude's `seven_day_*` model counters are independent weekly windows. `seven_day
 
 Verify with `npm test`, `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml -j 1`, and, with Vite running, `node tests/notch-sessions-ui.mjs`, `node tests/desktop-ui.mjs`, `node tests/docking-ui.mjs`, and `node tests/history-privacy-ui.mjs`. The new UI test saves demonstration screenshots under `artifacts/notch/`.
 
-`src-tauri/src/auto_switch.rs` implements opt-in exhaustion switching after scheduled or manual usage refreshes. `usagePreferences.autoSwitch` holds provider booleans and `sessions` (`close` by default when opted in, or `wait`). Targets respect purpose and suggestion exclusions. It requires exact 0%, successful recent readings, not-yet-due reset windows, and positive comparable target windows. Antigravity compares the selected group, and a selected Claude model adds its own weekly constraint. Claude target usage is validated on demand; other providers rank already fresh saved readings. Revalidation runs within each switch I/O transaction before closing sessions and before replacing credentials, so changed settings/accounts cancel pending switches. Manual switching retains its explicit review. Generic status and a five-minute retry timestamp persist in `auto-switch-state.json`; provider cooldowns remain authoritative. No automated test switches real credentials or closes user sessions.
+`src-tauri/src/auto_switch.rs` implements opt-in exhaustion switching after scheduled or manual usage refreshes. `usagePreferences.autoSwitch` holds provider booleans and `sessions` (`wait` by default). The `close` policy also requires `forceCloseConfirmed`, which is set by choosing the force-close option. Targets respect purpose and suggestion exclusions. It requires exact 0%, successful recent readings, not-yet-due reset windows, and positive comparable target windows. Antigravity compares the selected group, and a selected Claude model adds its own weekly constraint. Claude target usage is validated on demand; other providers rank already fresh saved readings. Revalidation runs within each switch I/O transaction before closing sessions and before replacing credentials, so changed settings/accounts cancel pending switches. Manual switching retains its explicit review. Generic status and a five-minute retry timestamp persist in `auto-switch-state.json`; provider cooldowns remain authoritative. No automated test switches real credentials or closes user sessions.
 
 Collapsed surfaces are visually limited to 320 × 26 at horizontal edges (44 pixels tall when floating), within the existing transparent placement window so centering and expansion anchors stay stable. `set_expanded` toggles native cursor-event ignoring: collapsed clicks go to underlying apps; expanded controls are interactive. Native cursor polling observes the visible bar's top 3 logical pixels even while Windows routes mouse input through the window. A 200 ms dwell opens it once per entry; leaving the strip rearms it. The browser preview mirrors this geometry with pointer events disabled on the compact surface. Keyboard/tray opening remains available. `desktop::reveal_tests` covers the visible strip on every edge, while the UI checks verify body crossings and quick top-edge crossings stay closed.
 

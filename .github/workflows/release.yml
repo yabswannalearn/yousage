@@ -33,13 +33,21 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Run frontend and Rust tests
-        run: |
-          npm test
-          cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Run frontend tests
+        run: npm test
+
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Build Tauri NSIS Setup Wizard & standalone executable
         run: npm run tauri build
+
+      - name: Smoke test install, upgrade, and uninstall
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $setup = Get-Item "src-tauri/target/release/bundle/nsis/YouSage_${version}_x64-setup.exe"
+          ./tests/installer-smoke.ps1 -Installer $setup.FullName -Version $version
+          "YOUSAGE_SETUP_EXE=$($setup.FullName)" >> $env:GITHUB_ENV
 
       - name: Upload installers to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -48,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          $setup = Get-Item $env:YOUSAGE_SETUP_EXE
           $exe = Get-Item "src-tauri/target/release/yousage.exe"
           if (-not (gh release view $tag 2>$null)) {
             gh release create $tag $setup.FullName $exe.FullName `

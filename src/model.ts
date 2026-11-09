@@ -91,7 +91,7 @@ export interface UsagePreferences {
   notchProviders: Provider[];
   notchWindow: PreviewWindowMode;
   smartNotch?: boolean;
-  autoSwitch?: Record<Provider, boolean> & { sessions: 'wait' | 'close' };
+  autoSwitch?: Record<Provider, boolean> & { sessions: 'wait' | 'close'; forceCloseConfirmed?: boolean };
   alertRules: Record<Provider, { warningPercent: number; criticalPercent: number }> & {
     lowEnabled: boolean;
     resetEnabled: boolean;
@@ -145,7 +145,14 @@ export function usagePreferences(settings?: { usagePreferences?: unknown } | nul
   if (typeof saved.smartNotch === 'boolean') normalized.smartNotch = saved.smartNotch;
   if (saved.autoSwitch != null) {
     const automatic = record(saved.autoSwitch);
-    normalized.autoSwitch = { codex: automatic.codex === true, antigravity: automatic.antigravity === true, claude: automatic.claude === true, sessions: automatic.sessions == null || automatic.sessions === 'close' ? 'close' : 'wait' };
+    const forceCloseConfirmed = automatic.sessions === 'close' && automatic.forceCloseConfirmed === true;
+    normalized.autoSwitch = {
+      codex: automatic.codex === true,
+      antigravity: automatic.antigravity === true,
+      claude: automatic.claude === true,
+      sessions: forceCloseConfirmed ? 'close' : 'wait',
+      ...(forceCloseConfirmed ? { forceCloseConfirmed } : {}),
+    };
   }
   // Preserve the order selected by the person, while removing duplicates.
   if (Array.isArray(saved.notchProviders)) normalized.notchProviders = [...new Set(saved.notchProviders.filter((provider): provider is Provider => providers.includes(provider as Provider)))];

@@ -1,4 +1,4 @@
-use crate::{model::{AntigravityGroup, UsageWindow}, state::{self, AppState, Snapshot}, usage::{AutoSwitchSessions, HealthStatus, Purpose}};
+use crate::{model::{AntigravityGroup, UsageWindow}, state::{self, AppState, Snapshot}, usage::{HealthStatus, Purpose}};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::atomic::Ordering};
 use tauri::{AppHandle, Manager};
@@ -123,7 +123,7 @@ fn authorize_snapshot(snapshot: &Snapshot, request: &Request, available: &HashMa
         return Err("Auto switch cancelled because the active account or account preferences changed.".into());
     }
     if capacity(&current.windows, available, now).is_none() { return Err("The next account has no verified allowance for the exhausted windows.".into()); }
-    Ok(snapshot.settings.usage_preferences.auto_switch.sessions == AutoSwitchSessions::Close)
+    Ok(snapshot.settings.usage_preferences.auto_switch.closes_sessions())
 }
 
 fn status(state: &AppState, provider: &str, message: &str, next: Option<i64>) {
@@ -144,7 +144,7 @@ pub async fn run(app: AppHandle) {
             continue;
         }
         let runtime_provider = match provider { "codex" => crate::processes::Provider::Codex, "antigravity" => crate::processes::Provider::Antigravity, _ => crate::processes::Provider::Claude };
-        let allow_close = snapshot.settings.usage_preferences.auto_switch.sessions == AutoSwitchSessions::Close;
+        let allow_close = snapshot.settings.usage_preferences.auto_switch.closes_sessions();
         if !allow_close {
             match crate::processes::inspect(runtime_provider).await {
                 Ok(runtime) if runtime.running() => { status(&state, provider, "At 0% remaining. Waiting for this provider's open sessions to close.", None); continue; }
@@ -274,9 +274,11 @@ mod tests {
         let mut snapshot = snapshot();
         let mut request = trigger(&snapshot, "codex", 1000).unwrap(); request.id = "personal".into();
         let available = windows(snapshot.accounts[1].five_hour.as_ref(), snapshot.accounts[1].weekly.as_ref());
-        assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(true));
-        snapshot.settings.usage_preferences.auto_switch.sessions = AutoSwitchSessions::Wait;
         assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(false));
+        snapshot.settings.usage_preferences.auto_switch.sessions = crate::usage::AutoSwitchSessions::Close;
+        assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(false));
+        snapshot.settings.usage_preferences.auto_switch.force_close_confirmed = true;
+        assert_eq!(authorize_snapshot(&snapshot, &request, &available, 1000), Ok(true));
         snapshot.settings.usage_preferences.auto_switch.codex = false;
         assert!(authorize_snapshot(&snapshot, &request, &available, 1000).is_err());
         snapshot.settings.usage_preferences.auto_switch.codex = true;

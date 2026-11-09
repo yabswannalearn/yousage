@@ -72,7 +72,7 @@ try {
     assert.equal(await control.isChecked(), false, 'auto switching must start disabled');
     await control.check();
   }
-  assert.equal(await page.locator('#auto-switch-sessions').inputValue(), 'close');
+  assert.equal(await page.locator('#auto-switch-sessions').inputValue(), 'wait');
   await page.locator('#auto-switch-sessions').selectOption('close');
   assert.match(await page.locator('.auto-switch-warning').innerText(), /unsaved work can be lost/);
   await page.locator('.auto-switch-settings').screenshot({ path: 'artifacts/notch/auto-switch-settings.png' });
