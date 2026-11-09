@@ -106,7 +106,6 @@ pub async fn refresh(app: &AppHandle) {
             }
             *state.claude_token_fingerprint.lock().unwrap() = None;
             crate::claude_accounts::sync_accounts(&state);
-            state.emit(app);
             return;
         }
     };
@@ -126,7 +125,6 @@ pub async fn refresh(app: &AppHandle) {
         // Remember the current token so an unchanged, unidentified sign-in does
         // not look like a different account on every background scan.
         *state.claude_token_fingerprint.lock().unwrap() = Some(fingerprint);
-        state.emit(app);
         return;
     }
     *state.claude_token_fingerprint.lock().unwrap() = Some(fingerprint);
@@ -135,7 +133,6 @@ pub async fn refresh(app: &AppHandle) {
         if changed_account { snapshot.claude = ClaudeStatus { accounts: snapshot.claude.accounts.clone(), ..ClaudeStatus::default() }; }
         snapshot.health.claude = ProviderHealth::checking(snapshot.claude.updated_at);
     }
-    state.emit(app);
     let result = fetch_usage(&token).await.and_then(|value| parse_usage(&value).map(|(five, week)| (five, week, model_limits(&value))).map_err(|error| (error, REFRESH_SECONDS)))
         .and_then(|windows| if windows.0.is_none() && windows.1.is_none() && windows.2.is_empty() {
             Err(("Claude returned no allowance windows for this sign-in.".into(), REFRESH_SECONDS))
@@ -166,8 +163,6 @@ pub async fn refresh(app: &AppHandle) {
         }
     }
     crate::claude_accounts::sync_accounts(&state);
-    state.emit(app);
-    let _ = state.persist();
 }
 
 // Model-specific weekly limits are reported separately from the overall week.

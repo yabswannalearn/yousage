@@ -46,6 +46,7 @@ await page.addInitScript(() => {
         if (args.providers) {
           snapshot.settings.notchSource = args.providers[0];
           snapshot.settings.hiddenProviders = ['codex', 'antigravity', 'claude'].filter(provider => !args.providers.includes(provider));
+          snapshot.settings.pausedProviders = [...snapshot.settings.hiddenProviders];
         }
         window.testBridge.emit('usage-updated', snapshot);
       }
@@ -69,6 +70,11 @@ await page.addInitScript(() => {
       if (command === 'update_usage_preferences') {
         if (window.testBridge.delayPreferenceSave) await new Promise(resolve => { window.testBridge.releasePreferenceSave = resolve; });
         snapshot.settings.usagePreferences = args.preferences;
+        window.testBridge.emit('usage-updated', snapshot);
+      }
+      if (command === 'set_provider_tracking') {
+        const paused = (snapshot.settings.pausedProviders ?? []).filter(provider => provider !== args.provider);
+        snapshot.settings.pausedProviders = args.enabled ? paused : [...paused, args.provider];
         window.testBridge.emit('usage-updated', snapshot);
       }
       if (command === 'dismiss_alert') {
@@ -404,6 +410,26 @@ try {
   assert.equal(await page.locator('[data-action="clear-alerts"]').count(), 0);
   await page.evaluate(() => window.testBridge.emit('hotkey-cycle-notch'));
   await page.waitForFunction(() => window.testBridge.snapshot.settings.notchSource !== 'codex');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const tracking = page.getByRole('checkbox', { name: 'Track Claude in background', exact: true });
+  await tracking.uncheck();
+  assert.equal(await page.locator('#show-claude').isChecked(), true, 'pausing polling leaves the provider visible');
+  await page.locator('[data-tab="system"]').click();
+  assert.equal(await page.getByText('Tracking paused', { exact: true }).count(), 1);
+  await page.locator('[data-tab="general"]').click();
+  await tracking.check();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => document.querySelector('#notch-toggle').getAttribute('aria-expanded') === 'false');
+  assert.equal(await page.evaluate(() => {
+    const button = document.getElementById('notch-toggle');
+    const { snapshot, emit } = window.testBridge;
+    snapshot.settings.notchSource = 'codex';
+    snapshot.settings.usagePreferences.smartNotch = false;
+    snapshot.accounts[0].fiveHour.remaining = 43;
+    emit('usage-updated', snapshot);
+    return button === document.getElementById('notch-toggle');
+  }), true, 'a collapsed refresh patches the existing notch');
+  assert.match(await page.locator('.compact-readings').innerText(), /43%/);
   await page.goto('http://127.0.0.1:1420/?firstRun=1');
   await page.getByRole('heading', { name: 'Choose what to track' }).waitFor();
   await page.waitForFunction(() => document.getElementById('onboarding-title') === document.activeElement);

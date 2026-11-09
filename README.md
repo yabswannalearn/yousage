@@ -35,6 +35,8 @@ The dashboard opens on first launch so you can choose those providers and see th
 
 For a missing or stale reading, open **Settings → System → Connection health** to see the last successful check and next retry. Claude usage depends on an internal account endpoint and may be temporarily unavailable after rate limiting or upstream changes.
 
+In **Settings → Preview → Background tracking**, pause providers you rarely use. Their last readings remain available, and **Refresh usage** checks them on demand. By default, active accounts follow your refresh interval and saved Codex and Antigravity accounts are checked at most once every five minutes in the background.
+
 ## Use the notch
 
 - Rest on the top edge for 200 ms to expand the notch. Clicks on the collapsed bar pass through to the app underneath.

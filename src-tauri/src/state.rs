@@ -26,6 +26,7 @@ pub struct Config {
     pub notifications_enabled: bool,
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
+    pub paused_providers: Vec<String>,
     pub app_theme: AppTheme,
     pub usage_preferences: UsagePreferences,
     pub privacy_mode: bool,
@@ -53,6 +54,7 @@ impl Default for Config {
             notifications_enabled: true,
             provider_colors: ProviderColors::default(),
             hidden_providers: vec![],
+            paused_providers: vec![],
             app_theme: AppTheme::default(),
             usage_preferences: UsagePreferences::default(),
             privacy_mode: false,
@@ -72,6 +74,7 @@ pub struct Settings {
     pub notifications_enabled: bool,
     pub provider_colors: ProviderColors,
     pub hidden_providers: Vec<String>,
+    pub paused_providers: Vec<String>,
     pub app_theme: AppTheme,
     pub usage_preferences: UsagePreferences,
     pub privacy_mode: bool,
@@ -117,8 +120,22 @@ pub struct AppState {
     pub resizing: AtomicBool,
     pub resize_generation: AtomicU64,
     pub window: Mutex<crate::desktop::WindowState>,
+    pub tray_status: Mutex<(String, bool)>,
     pub claude_next_refresh: AtomicU64,
     pub claude_token_fingerprint: Mutex<Option<[u8; 32]>>,
+    saved_checks: Mutex<SavedChecks>,
+}
+
+#[derive(Default)]
+struct SavedChecks {
+    codex: Option<Instant>,
+    antigravity: Option<Instant>,
+}
+
+fn saved_accounts_due(next: &mut Option<Instant>, now: Instant, requested: bool) -> bool {
+    if !requested && next.is_some_and(|deadline| now < deadline) { return false; }
+    *next = Some(now + Duration::from_secs(300));
+    true
 }
 
 impl AppState {
@@ -173,6 +190,7 @@ impl AppState {
                 notifications_enabled: config.notifications_enabled,
                 provider_colors: config.provider_colors.clone(),
                 hidden_providers: config.hidden_providers.clone(),
+                paused_providers: config.paused_providers.clone(),
                 app_theme: config.app_theme.clone(),
                 usage_preferences: config.usage_preferences.clone(),
                 privacy_mode: config.privacy_mode,
@@ -191,26 +209,30 @@ impl AppState {
             resizing: AtomicBool::new(false), resize_generation: AtomicU64::new(0), window: Mutex::new(crate::desktop::WindowState::default()),
             claude_next_refresh: AtomicU64::new(claude_next_refresh),
             claude_token_fingerprint: Mutex::new(None),
+            tray_status: Mutex::default(),
+            saved_checks: Mutex::new(SavedChecks::default()),
         })
     }
 
     pub fn persist(&self) -> Result<(), String> {
         let _guard = self.persist_guard.lock().unwrap();
         let config = serde_json::to_vec_pretty(&*self.config.lock().unwrap()).map_err(|_| "Could not save settings.")?;
-        atomic_write(&self.directory.join("settings.json"), &config)?;
-        let snapshot = self.snapshot.lock().unwrap();
-        let accounts = serde_json::to_vec(&snapshot.accounts).map_err(|_| "Could not save usage.")?;
-        atomic_write(&self.directory.join("usage-cache.json"), &accounts)?;
-        let antigravity = serde_json::to_vec(&snapshot.antigravity).map_err(|_| "Could not save Antigravity usage.")?;
-        atomic_write(&self.directory.join("antigravity-cache.json"), &antigravity)?;
-        let claude = serde_json::to_vec(&snapshot.claude).map_err(|_| "Could not save Claude usage.")?;
-        atomic_write(&self.directory.join("claude-cache.json"), &claude)?;
-        let health = serde_json::to_vec(&snapshot.health).map_err(|_| "Could not save provider health.")?;
-        atomic_write(&self.directory.join("health-cache.json"), &health)?;
-        let automatic = serde_json::to_vec(&snapshot.auto_switch).map_err(|_| "Could not save automatic switch status.")?;
-        atomic_write(&self.directory.join("auto-switch-state.json"), &automatic)?;
-        let history = serde_json::to_vec(&*self.alert_history.lock().unwrap()).map_err(|_| "Could not save alert state.")?;
-        atomic_write(&self.directory.join("alert-state.json"), &history)?;
+        let caches = {
+            let snapshot = self.snapshot.lock().unwrap();
+            [
+                ("usage-cache.json", serde_json::to_vec(&snapshot.accounts)),
+                ("antigravity-cache.json", serde_json::to_vec(&snapshot.antigravity)),
+                ("claude-cache.json", serde_json::to_vec(&snapshot.claude)),
+                ("health-cache.json", serde_json::to_vec(&snapshot.health)),
+                ("auto-switch-state.json", serde_json::to_vec(&snapshot.auto_switch)),
+            ]
+        };
+        let alerts = serde_json::to_vec(&*self.alert_history.lock().unwrap()).map_err(|_| "Could not save alert state.")?;
+        write_if_changed(&self.directory.join("settings.json"), &config)?;
+        for (file, bytes) in caches {
+            write_if_changed(&self.directory.join(file), &bytes.map_err(|_| "Could not save usage cache.")?)?;
+        }
+        write_if_changed(&self.directory.join("alert-state.json"), &alerts)?;
         let mut history = self.usage_history.lock().unwrap();
         if history.is_dirty() {
             let bytes = serde_json::to_vec(&*history).map_err(|_| "Could not save usage history.")?;
@@ -281,6 +303,11 @@ pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<(), S
     save().map_err(|_| "Could not save YouSage data. Check that your user data folder is writable.".into())
 }
 
+fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if fs::read(path).is_ok_and(|existing| existing == bytes) { return Ok(()); }
+    atomic_write(path, bytes)
+}
+
 pub fn now() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64 }
 
 pub async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -> Result<Option<Account>, String> {
@@ -312,23 +339,52 @@ pub async fn read_account(rpc: &mut Rpc, id: &str, label: &str, desktop: bool) -
 }
 
 pub async fn refresh_all(app: AppHandle) {
+    refresh(app, true).await;
+}
+
+pub async fn refresh_scheduled(app: AppHandle) {
+    refresh(app, false).await;
+}
+
+async fn refresh(app: AppHandle, requested: bool) {
     let state = app.state::<AppState>();
     if state.switch_running.load(Ordering::SeqCst) { return }
     let Ok(_guard) = state.io.try_lock() else { return };
+    let paused = state.config.lock().unwrap().paused_providers.clone();
+    let should_check = |provider: &str| requested || !paused.iter().any(|name| name == provider);
+    let (codex, antigravity, claude) = (should_check("codex"), should_check("antigravity"), should_check("claude"));
+    if !codex && !antigravity && !claude { return; }
     state.snapshot.lock().unwrap().refreshing = true;
     state.emit(&app);
-    // Claude's account-metadata endpoint has a separate, conservative cadence.
-    // Start it alongside the CLI providers so a slow CLI cannot delay it.
-    let claude_app = app.clone();
-    let claude_refresh = tauri::async_runtime::spawn(async move { crate::claude::refresh(&claude_app).await });
-    refresh_cli_providers(&app).await;
-    let _ = claude_refresh.await;
+    // Providers have separate credential stores. Check them independently
+    // while the outer I/O guard protects switching.
+    let codex_refresh = codex.then(|| {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { refresh_codex(&app, requested).await })
+    });
+    let claude_refresh = claude.then(|| {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { crate::claude::refresh(&app).await })
+    });
+    if antigravity { refresh_antigravity(&app, requested).await; }
+    if let Some(task) = codex_refresh { let _ = task.await; }
+    if let Some(task) = claude_refresh { let _ = task.await; }
     let new_alerts = {
         let mut snapshot = state.snapshot.lock().unwrap();
         snapshot.refreshing = false;
         let rules = &snapshot.settings.usage_preferences.alert_rules;
         let mut history = state.alert_history.lock().unwrap();
-        let evaluated = usage::evaluate_alerts(&mut history, &snapshot.accounts, &snapshot.antigravity, &snapshot.claude, rules, now());
+        let tracks = |provider: &str| !snapshot.settings.paused_providers.iter().any(|name| name == provider);
+        let empty_antigravity = AntigravityStatus::default();
+        let empty_claude = ClaudeStatus::default();
+        let evaluated = usage::evaluate_alerts(
+            &mut history,
+            if tracks("codex") { &snapshot.accounts } else { &[] },
+            if tracks("antigravity") { &snapshot.antigravity } else { &empty_antigravity },
+            if tracks("claude") { &snapshot.claude } else { &empty_claude },
+            rules,
+            now(),
+        );
         let delivery_enabled = snapshot.settings.notifications_enabled && !rules.suppressed(now(), usage::local_minutes());
         let evaluated: Vec<_> = evaluated.into_iter().filter(|alert| {
             let provider = if alert.id.starts_with("agy:") { "antigravity" } else if alert.id.starts_with("claude:") { "claude" } else { "codex" };
@@ -341,10 +397,10 @@ pub async fn refresh_all(app: AppHandle) {
         // Bound retained banners; alert deduplication is persisted separately.
         if snapshot.alerts.len() > 100 { let remove = snapshot.alerts.len() - 100; snapshot.alerts.drain(..remove); }
         let next_check = now().saturating_add(snapshot.settings.refresh_seconds as i64);
-        if snapshot.health.codex.status != HealthStatus::RateLimited { snapshot.health.codex.next_retry_at = Some(next_check); }
-        if snapshot.health.antigravity.status != HealthStatus::RateLimited { snapshot.health.antigravity.next_retry_at = Some(next_check); }
+        if codex && snapshot.health.codex.status != HealthStatus::RateLimited { snapshot.health.codex.next_retry_at = Some(next_check); }
+        if antigravity && snapshot.health.antigravity.status != HealthStatus::RateLimited { snapshot.health.antigravity.next_retry_at = Some(next_check); }
         let eligible = state.claude_next_refresh.load(Ordering::SeqCst).min(i64::MAX as u64) as i64;
-        snapshot.health.claude.next_retry_at = Some(next_scheduled_retry(now(), snapshot.settings.refresh_seconds, eligible));
+        if claude { snapshot.health.claude.next_retry_at = Some(next_scheduled_retry(now(), snapshot.settings.refresh_seconds, eligible)); }
         evaluated
     };
     for alert in new_alerts {
@@ -373,15 +429,6 @@ fn next_scheduled_retry(now: i64, cadence: u64, eligible: i64) -> i64 {
     now.saturating_add(scans.saturating_mul(cadence))
 }
 
-async fn refresh_cli_providers(app: &AppHandle) {
-    // Different providers have separate credential stores. Their independent
-    // checks can run together while the outer I/O guard protects switching.
-    let codex_app = app.clone();
-    let codex = tauri::async_runtime::spawn(async move { refresh_codex(&codex_app).await });
-    refresh_antigravity(app).await;
-    let _ = codex.await;
-}
-
 fn cooling_down(health: &ProviderHealth) -> bool {
     health.status == HealthStatus::RateLimited && health.next_retry_at.is_some_and(|retry| retry > now())
 }
@@ -394,7 +441,7 @@ pub(crate) fn complete_health(health: &mut ProviderHealth, provider: &str, error
     }
 }
 
-async fn refresh_codex(app: &AppHandle) {
+async fn refresh_codex(app: &AppHandle, requested: bool) {
     let state = app.state::<AppState>();
     let config = state.config.lock().unwrap().clone();
     {
@@ -402,7 +449,7 @@ async fn refresh_codex(app: &AppHandle) {
         if cooling_down(&snapshot.health.codex) { return; }
         snapshot.health.codex = ProviderHealth::checking(snapshot.health.codex.last_success_at);
     }
-    state.emit(app);
+    let check_saved = saved_accounts_due(&mut state.saved_checks.lock().unwrap().codex, Instant::now(), requested);
     let mut profiles = vec![("desktop".to_owned(), config.desktop_label.unwrap_or_default(), rpc::desktop_home(), true)];
     for profile in config.profiles {
         if let Ok(home) = state.profile_home(&profile.id) { profiles.push((profile.id, profile.label, home, false)); }
@@ -416,8 +463,9 @@ async fn refresh_codex(app: &AppHandle) {
                 // One refresh owner for the active login avoids competing token rotation.
                 let mut account = active.unwrap(); account.id = id.clone(); account.label = label; account.desktop = false;
                 snapshot.accounts.retain(|a| a.id != id); snapshot.accounts.push(account);
-                drop(snapshot); state.emit(app); continue;
+                continue;
             }
+            if !check_saved { continue; }
         }
         let result = match Rpc::start(&home, !desktop).await {
             Ok(mut rpc) => read_account(&mut rpc, &id, &label, desktop).await,
@@ -452,7 +500,6 @@ async fn refresh_codex(app: &AppHandle) {
                 }
             }
         }
-        state.emit(app);
     }
     {
         let mut snapshot = state.snapshot.lock().unwrap();
@@ -464,7 +511,6 @@ async fn refresh_codex(app: &AppHandle) {
             snapshot.health.codex.message = format!("{inactive_failures} connected account(s) need attention. Use Sign in again on their cards.");
         }
     }
-    state.emit(app);
 }
 
 fn codex_last_success(accounts: &[Account], active_account_id: Option<&str>) -> Option<i64> {
@@ -496,7 +542,7 @@ fn preserve_antigravity_reading(account: &mut AntigravityAccount, previous: &[An
     }
 }
 
-async fn refresh_antigravity(app: &AppHandle) {
+async fn refresh_antigravity(app: &AppHandle, requested: bool) {
     let state = app.state::<AppState>();
     let config = state.config.lock().unwrap().clone();
     let active_email_before = rpc::antigravity_email();
@@ -512,7 +558,7 @@ async fn refresh_antigravity(app: &AppHandle) {
         snapshot.health.antigravity = ProviderHealth::checking(snapshot.antigravity.updated_at);
         previous
     };
-    state.emit(app);
+    let check_saved = saved_accounts_due(&mut state.saved_checks.lock().unwrap().antigravity, Instant::now(), requested);
     let agy_profiles = config.antigravity_profiles;
     let result = rpc::read_antigravity().await;
     let active_email_after = rpc::antigravity_email();
@@ -553,12 +599,17 @@ async fn refresh_antigravity(app: &AppHandle) {
             label: active_label, email: active.email.clone(), groups: active.groups.clone(),
             updated_at: active.updated_at, error: active.error.clone(), active: true });
     }
-    state.emit(app);
     let active_agy_email = state.snapshot.lock().unwrap().antigravity.email.clone();
     for profile in agy_profiles {
         let Ok(home) = state.antigravity_profile_home(&profile.id) else { continue; };
         let saved_email = rpc::antigravity_email_in(&home);
         if same_email(saved_email.as_deref(), active_agy_email.as_deref()) { continue; }
+        if !check_saved {
+            if let Some(old) = previous_accounts.iter().find(|old| old.id == profile.id && same_email(old.email.as_deref(), saved_email.as_deref())) {
+                agy_accounts.push(AntigravityAccount { active: false, label: profile.label, ..old.clone() });
+            }
+            continue;
+        }
         let result = rpc::read_antigravity_in(Some(&home)).await;
         let final_email = rpc::antigravity_email_in(&home);
         let mut account = match result {
@@ -586,7 +637,6 @@ async fn refresh_antigravity(app: &AppHandle) {
             snapshot.health.antigravity.message = format!("{inactive_failures} saved account(s) need attention. Check their cards and save the sign-in again if needed.");
         }
     }
-    state.emit(app);
 }
 
 #[tauri::command]
@@ -983,6 +1033,7 @@ pub fn finish_onboarding(app: AppHandle, providers: Option<Vec<String>>) -> Resu
         }
         next.notch_source = providers[0].clone();
         next.hidden_providers = supported.into_iter().filter(|provider| !providers.iter().any(|chosen| chosen == provider)).map(str::to_owned).collect();
+        next.paused_providers = next.hidden_providers.clone();
     }
     next.onboarding_completed = true;
     let bytes = serde_json::to_vec_pretty(&next).map_err(|_| "Could not save setup.")?;
@@ -992,10 +1043,32 @@ pub fn finish_onboarding(app: AppHandle, providers: Option<Vec<String>>) -> Resu
         snapshot.settings.onboarding_completed = true;
         snapshot.settings.notch_source = next.notch_source.clone();
         snapshot.settings.hidden_providers = next.hidden_providers.clone();
+        snapshot.settings.paused_providers = next.paused_providers.clone();
     }
     *config = next;
     drop(config);
     drop(_persist);
+    state.emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_provider_tracking(app: AppHandle, provider: String, enabled: bool) -> Result<(), String> {
+    if !["codex", "antigravity", "claude"].contains(&provider.as_str()) {
+        return Err("Choose a valid provider to track.".into());
+    }
+    let state = app.state::<AppState>();
+    {
+        let _persist = state.persist_guard.lock().unwrap();
+        let mut config = state.config.lock().unwrap();
+        let mut next = config.clone();
+        next.paused_providers.retain(|name| name != &provider);
+        if !enabled { next.paused_providers.push(provider); }
+        let bytes = serde_json::to_vec_pretty(&next).map_err(|_| "Could not save tracking settings.")?;
+        write_if_changed(&state.directory.join("settings.json"), &bytes)?;
+        state.snapshot.lock().unwrap().settings.paused_providers = next.paused_providers.clone();
+        *config = next;
+    }
     state.emit(&app);
     Ok(())
 }
@@ -1060,6 +1133,31 @@ mod tests {
         assert!(serde_json::from_str::<Config>("{}").unwrap().onboarding_completed);
         let pending = serde_json::to_string(&Config::default()).unwrap();
         assert!(!serde_json::from_str::<Config>(&pending).unwrap().onboarding_completed);
+    }
+
+    #[test]
+    fn saved_profiles_wait_five_minutes_unless_requested() {
+        let start = Instant::now();
+        let mut next = None;
+        assert!(saved_accounts_due(&mut next, start, false));
+        assert!(!saved_accounts_due(&mut next, start + Duration::from_secs(60), false));
+        assert!(saved_accounts_due(&mut next, start + Duration::from_secs(60), true));
+        assert!(!saved_accounts_due(&mut next, start + Duration::from_secs(300), false));
+        assert!(saved_accounts_due(&mut next, start + Duration::from_secs(360), false));
+    }
+
+    #[test]
+    fn unchanged_cache_is_not_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.json");
+        write_if_changed(&path, b"original").unwrap();
+        fs::File::options().write(true).open(&path).unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1)).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        write_if_changed(&path, b"original").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        write_if_changed(&path, b"changed").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"changed");
     }
 
     #[test]

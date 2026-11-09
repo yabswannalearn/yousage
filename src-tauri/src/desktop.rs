@@ -48,16 +48,25 @@ fn watch_pointer(app: AppHandle) {
         let mut reveal_since = None;
         let mut reveal_latched = false;
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            let state = app.state::<AppState>();
+            let hidden = state.config.lock().unwrap().hidden;
+            tokio::time::sleep(std::time::Duration::from_millis(if hidden { 500 } else { 40 })).await;
+            if hidden {
+                reveal_since = None;
+                reveal_latched = false;
+                previous = POINT { x: i32::MIN, y: i32::MIN };
+                continue;
+            }
             let mut cursor = POINT { x: 0, y: 0 };
             if unsafe { GetCursorPos(&mut cursor) } == 0 { continue; }
             let keys = [1, 2, 4].map(|key| unsafe { GetAsyncKeyState(key) });
             let pressed = keys.map(|key| key < 0);
             let clicked = keys.iter().any(|key| key & 1 != 0) || pressed.iter().zip(buttons).any(|(current, old)| *current && !old);
+            let buttons_changed = pressed != buttons;
             buttons = pressed;
             let moved = cursor.x != previous.x || cursor.y != previous.y;
             previous = cursor;
-            let state = app.state::<AppState>();
+            if !moved && !clicked && !buttons_changed && reveal_since.is_none() { continue; }
             let (expanded, dragging) = { let placement = state.window.lock().unwrap(); (placement.expanded, placement.dragging) };
             if dragging || state.resizing.load(Ordering::SeqCst) { reveal_since = None; continue; }
             let Some(window) = app.get_webview_window("main") else { break; };
@@ -260,7 +269,6 @@ pub fn update_tray(app: &AppHandle, snapshot: &state::Snapshot) {
     if let Some(a) = agy_5h { readings.push(format!("AGY {a}")); }
     if let Some(c) = claude_5h { readings.push(format!("Claude 5h {c}")); }
     let tooltip = format!("{} (Alt+Shift+U)", readings.join(" · "));
-    let _ = tray.set_tooltip(Some(&tooltip));
     let low_codex = codex_active.is_some_and(|a| {
         a.error.is_some()
             || a.five_hour.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.codex.warning_percent)
@@ -274,7 +282,14 @@ pub fn update_tray(app: &AppHandle, snapshot: &state::Snapshot) {
     let low_claude = visible("claude") && (snapshot.claude.error.is_some()
         || snapshot.claude.five_hour.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.claude.warning_percent)
         || snapshot.claude.weekly.as_ref().is_some_and(|w| w.remaining <= snapshot.settings.usage_preferences.alert_rules.claude.warning_percent));
-    let _ = tray.set_icon(Some(tray_icon_image(low_codex || low_agy || low_claude)));
+    let attention = low_codex || low_agy || low_claude;
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = app_handle.state::<AppState>();
+        let mut previous = state.tray_status.lock().unwrap();
+        if tooltip != previous.0 && tray.set_tooltip(Some(&tooltip)).is_ok() { previous.0 = tooltip; }
+        if attention != previous.1 && tray.set_icon(Some(tray_icon_image(attention))).is_ok() { previous.1 = attention; }
+    });
 }
 
 #[cfg(windows)]
