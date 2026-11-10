@@ -11,7 +11,7 @@ const isOpen = () => page.locator('#notch-toggle').getAttribute('aria-expanded')
 const hover = async () => {
   await page.mouse.move(950, 800);
   const box = await page.locator('.shell').boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + 1);
+  await page.mouse.move(box.x + box.width / 2, box.y + 6);
   await page.waitForTimeout(700);
 };
 try {
@@ -84,6 +84,7 @@ try {
   await page.getByRole('button', { name: 'Enable session status', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Disable session status', exact: true }).count(), 1);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'View Claude details', exact: true }).click();
   await page.getByRole('button', { name: 'Save sign-in', exact: true }).last().click();
   await page.locator('#claude-save-label').fill('Personal Claude');
   await page.locator('form[data-form="save-claude"] button[type="submit"]').click();

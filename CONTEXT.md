@@ -64,8 +64,11 @@ It can float or attach to any edge of a monitor's usable area. Drag near an edge
 _Avoid_: Closed app, minimized app
 
 **Detail panel**:
-The view that expands in place from the **Notch** to inspect visible Codex **Connected accounts**, local **Antigravity model groups**, and the **Claude subscription**.
+The view that expands in place from the **Notch**. It opens to the **Subscription overview** and lets the person inspect individual accounts and model groups.
 _Avoid_: Open notch, dashboard
+
+**Subscription overview**:
+The first view in the **Detail panel**, with **Usage remaining** and **Reset time** for each visible **Subscription**. Choose a subscription to inspect its accounts or model groups.
 
 ## Example dialogue
 

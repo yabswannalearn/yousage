@@ -6,6 +6,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 const WIDTH: f64 = 440.0;
 const COMPACT: f64 = 80.0;
+const REVEAL_STRIP: f64 = 8.0;
 
 #[derive(Default)]
 pub struct WindowState { pub expanded: bool, pub upward: bool, pub dragging: bool }
@@ -15,7 +16,7 @@ fn in_reveal_strip(x: f64, y: f64, width: f64, height: f64, edge: DockEdge) -> b
     let visible = available.min(320.0);
     let left = match edge { DockEdge::Left => 0.0, DockEdge::Right => width - visible, _ => (width - visible) / 2.0 };
     let top = match edge { DockEdge::Top => 0.0, DockEdge::Bottom => height - 26.0, _ => 8.0 };
-    x >= left + 6.0 && x < left + visible - 6.0 && y >= top && y < top + 3.0
+    x >= left + 6.0 && x < left + visible - 6.0 && y >= top && y < top + REVEAL_STRIP
 }
 
 #[cfg(test)]
@@ -24,14 +25,19 @@ mod reveal_tests {
     #[test]
     fn only_the_visible_top_lip_reveals_on_each_edge() {
         assert!(in_reveal_strip(240.0, 1.0, 480.0, 40.0, DockEdge::Top));
+        assert!(in_reveal_strip(240.0, 7.0, 480.0, 40.0, DockEdge::Top));
+        assert!(!in_reveal_strip(240.0, 8.0, 480.0, 40.0, DockEdge::Top));
         assert!(!in_reveal_strip(240.0, 15.0, 480.0, 40.0, DockEdge::Top));
         assert!(!in_reveal_strip(20.0, 1.0, 480.0, 40.0, DockEdge::Top));
         assert!(in_reveal_strip(220.0, 9.0, 440.0, 80.0, DockEdge::Floating));
+        assert!(in_reveal_strip(220.0, 15.0, 440.0, 80.0, DockEdge::Floating));
         assert!(!in_reveal_strip(220.0, 7.0, 440.0, 80.0, DockEdge::Floating));
         assert!(in_reveal_strip(240.0, 15.0, 480.0, 40.0, DockEdge::Bottom));
+        assert!(in_reveal_strip(240.0, 21.0, 480.0, 40.0, DockEdge::Bottom));
         assert!(!in_reveal_strip(240.0, 9.0, 480.0, 40.0, DockEdge::Bottom));
         for edge in [DockEdge::Left, DockEdge::Right] {
             assert!(in_reveal_strip(28.0, 9.0, 58.0, 184.0, edge));
+            assert!(in_reveal_strip(28.0, 15.0, 58.0, 184.0, edge));
             assert!(!in_reveal_strip(28.0, 30.0, 58.0, 184.0, edge));
         }
     }
@@ -122,7 +128,13 @@ pub fn start_notch_drag(app: AppHandle) -> Result<(), String> {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Layout { pub upward: bool, pub height: f64, pub width: f64, pub edge: DockEdge }
+pub struct Layout {
+    pub upward: bool,
+    pub height: f64,
+    pub width: f64,
+    pub edge: DockEdge,
+    pub compact_offset_y: f64,
+}
 
 fn finish_notch_drag(app: &AppHandle) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or("The notch window is unavailable.")?;
@@ -173,7 +185,10 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
     let compact = if side { 184.0 } else if edge == DockEdge::Floating { COMPACT } else { 40.0 };
     let width = if side && !expanded { 58.0 } else if !side && edge != DockEdge::Floating { 480.0 } else { WIDTH }.min(work.width as f64 / scale);
     let desired = if expanded && height.is_finite() { height.clamp(compact, 700.0) } else { compact };
-    let placement = place_docked_panel(anchor, work, edge, (width * scale).round() as i32, (compact * scale).round() as i32, (desired * scale).round() as i32);
+    let width_px = (width * scale).round() as i32;
+    let compact_px = (compact * scale).round() as i32;
+    let placement = place_docked_panel(anchor, work, edge, width_px, compact_px, (desired * scale).round() as i32);
+    let compact_placement = place_docked_panel(anchor, work, edge, width_px, compact_px, compact_px);
     state.resizing.store(true, Ordering::SeqCst);
     let generation = state.resize_generation.fetch_add(1, Ordering::SeqCst) + 1;
     {
@@ -191,7 +206,13 @@ pub fn set_expanded(app: AppHandle, expanded: bool, height: f64) -> Result<Layou
     });
     result.map_err(|_| "Could not resize the notch.")?;
     window.set_ignore_cursor_events(!expanded).map_err(|_| "Could not update notch click-through.")?;
-    let layout = Layout { upward: placement.upward, height: placement.height as f64 / scale, width, edge };
+    let layout = Layout {
+        upward: placement.upward,
+        height: placement.height as f64 / scale,
+        width,
+        edge,
+        compact_offset_y: (compact_placement.y - placement.y) as f64 / scale,
+    };
     let _ = app.emit("notch-layout", &layout);
     Ok(layout)
 }
@@ -327,7 +348,7 @@ fn spawn_global_hotkey(app: AppHandle) {
 }
 
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show_item = MenuItem::with_id(app, "show", "Open dashboard", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "Open usage details", true, None::<&str>)?;
     let cycle_item = MenuItem::with_id(app, "cycle-notch", "Cycle notch preview (Alt+Shift+N)", true, None::<&str>)?;
     let switch_item = MenuItem::with_id(app, "review-switch", "Review account switch…", true, None::<&str>)?;
     let hide_item = MenuItem::with_id(app, "hide", "Hide notch", true, None::<&str>)?;

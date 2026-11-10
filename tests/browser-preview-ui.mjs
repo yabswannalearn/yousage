@@ -18,7 +18,7 @@ try {
     const link = page.getByRole('link', { name: 'Open the interface preview' });
     if (method === 'click') await link.click();
     else await link.press('Enter');
-    await page.getByText('PREVIEW DATA', { exact: true }).waitFor();
+    await page.getByText('Preview data', { exact: true }).waitFor();
     assert.equal(await page.locator('#notch-toggle').getAttribute('aria-expanded'), 'true');
     assert.ok(await page.locator('#app').evaluate(el => el.getBoundingClientRect().width <= innerWidth));
     assert.equal(await page.evaluate(() => Boolean(window.__TAURI_INTERNALS__)), false);
