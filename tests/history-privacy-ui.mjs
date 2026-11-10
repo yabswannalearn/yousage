@@ -62,7 +62,12 @@ try {
   await page.locator('#notch-toggle').evaluate(el => el.focus());
   await page.keyboard.press('Enter');
   await page.waitForTimeout(470);
-  await page.getByRole('button', { name: 'History & pace', exact: true }).click();
+  const history = page.getByRole('button', { name: 'History', exact: true });
+  const openCodex = async () => {
+    await page.getByRole('button', { name: '‹ Overview', exact: true }).click();
+    await page.getByRole('button', { name: 'View Codex details', exact: true }).click();
+  };
+  await history.click();
   await page.waitForSelector('.history-chart');
   assert.match(await page.locator('.pacing-summary').innerText(), /Approximate.*12 percentage points\/hour over 1 hours/);
   assert.equal(await page.locator('.history-line').count(), 2, 'gaps and allowance resets must remain separate segments');
@@ -84,6 +89,7 @@ try {
   await page.evaluate(() => { window.testBridge.pendingHistory.find(item => item.range === 168).release(); window.testBridge.delayHistory = false; });
   await page.waitForTimeout(100);
   assert.match(await page.locator('#history-series').innerText(), /day/, 'an older range response must not replace the current range');
+  await openCodex();
   await page.locator('[data-action="manage"][data-id="saved"]').click();
   await page.locator('#name-saved').fill('Sensitive unsaved draft');
   await page.getByRole('button', { name: 'Toggle privacy mode', exact: true }).click();
@@ -93,6 +99,7 @@ try {
   const visiblePrivate = await page.locator('#app').innerText();
   assert.doesNotMatch(visiblePrivate, /Acme research|Personal writing|private@example\.com|claude@example\.com|agy@example\.com|Sensitive unsaved draft/);
   assert.match(visiblePrivate, /Codex account 1/);
+  await history.click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV', exact: true }).click()]);
   const stream = await download.createReadStream(); const chunks = []; for await (const chunk of stream) chunks.push(chunk);
   assert.match(Buffer.concat(chunks).toString(), /Codex account 1/);
@@ -115,10 +122,13 @@ try {
   assert.equal(await page.evaluate(() => window.testBridge.cleared), false, 'clearing requires a second explicit click');
   await page.getByRole('button', { name: 'Confirm clear history', exact: true }).click();
   await page.waitForFunction(() => window.testBridge.cleared);
+  await history.click();
   await page.waitForSelector('.history-empty');
   assert.match(await page.locator('.history-empty').innerText(), /history starts with fresh usage checks/);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Privacy mode', exact: true }).uncheck();
   await page.waitForFunction(() => document.querySelector('[data-action="privacy"]').getAttribute('aria-pressed') === 'false');
+  await openCodex();
   assert.equal(await page.locator('#name-saved').inputValue(), 'Acme research', 'turning privacy off must restore original stored names');
   assert.equal(await page.evaluate(() => window.testBridge.snapshot.accounts[0].label), 'Acme research');
   // A pre-existing confirmation and its later success notice must also respond to privacy toggles.
@@ -129,10 +139,12 @@ try {
   assert.doesNotMatch(await page.getByRole('dialog').innerText(), /Personal writing/);
   await page.getByRole('button', { name: 'Switch account', exact: true }).click();
   assert.doesNotMatch(await page.locator('.success-banner').innerText(), /Personal writing/);
-  await page.getByRole('button', { name: 'History & pace', exact: true }).click();
-  await page.waitForTimeout(400);
   const closedCalls = await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'get_usage_history').length);
-  await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
+  await page.evaluate(() => {
+    const { emit, snapshot } = window.testBridge;
+    emit('usage-updated', { ...snapshot, refreshing: true });
+    emit('usage-updated', snapshot);
+  });
   await page.waitForTimeout(400);
   assert.equal(await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'get_usage_history').length), closedCalls, 'background updates must not query history while the panel is closed');
   assert.deepEqual(failures, []);

@@ -25,7 +25,7 @@ To verify a download, compare its SHA-256 hash against the digest listed for tha
 ## Connect your accounts
 
 Install and sign in to the tools for the providers you want to track.
-The dashboard opens on first launch so you can choose those providers and see their setup steps. Select **Open dashboard** in the Windows system tray to return at any time.
+The Detail panel opens on first launch so you can choose which subscriptions to track. After setup, the panel opens to a subscription overview with allowance and reset times. Select **Open usage details** in the Windows system tray to return at any time.
 
 | Provider | Setup |
 | --- | --- |

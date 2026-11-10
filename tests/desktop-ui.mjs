@@ -104,6 +104,27 @@ try {
   assert.equal(await page.evaluate(() => window.testBridge.motionShell === document.querySelector('.shell')), true, 'usage updates must not restart the active animation');
   await page.waitForTimeout(470);
   const header = page.locator('#notch-toggle');
+  const openSubscription = name => page.getByRole('button', { name: `View ${name} details`, exact: true }).click();
+  const overview = () => page.getByRole('button', { name: '‹ Overview', exact: true }).click();
+  assert.equal(await page.locator('.overview-row').count(), 3);
+  assert.equal(await page.locator('.account-card').count(), 0, 'opening builds the overview without any account cards');
+  assert.doesNotMatch(await page.locator('[data-panel-body]').innerText(), /Updated just now/, 'healthy readings omit routine status text');
+  assert.equal(await page.evaluate(() => {
+    const { snapshot, emit } = window.testBridge;
+    const button = document.querySelector('[data-action="subscription"][data-provider="codex"]');
+    const scroll = document.querySelector('.panel-scroll');
+    button.focus();
+    const previous = snapshot.accounts[0].fiveHour;
+    snapshot.accounts[0].fiveHour = { ...previous, remaining: 63 };
+    snapshot.accounts[0].error = 'Connection interrupted';
+    emit('usage-updated', snapshot);
+    const unchanged = button === document.activeElement && scroll === document.querySelector('.panel-scroll');
+    const cacheVisible = document.querySelector('[data-subscription="codex"]').textContent.includes('Last known usage');
+    snapshot.accounts[0].fiveHour = previous;
+    snapshot.accounts[0].error = null;
+    emit('usage-updated', snapshot);
+    return unchanged && cacheVisible;
+  }), true, 'a cached reading is labeled without replacing the overview scroll container or focused button');
   const rect = await header.boundingBox();
   await page.mouse.move(rect.x + 70, rect.y + 20);
   await page.mouse.down();
@@ -142,7 +163,7 @@ try {
   await page.getByLabel('App background', { exact: true }).fill('#e9e4ff');
   await page.getByLabel('UI accent', { exact: true }).fill('#8b45ce');
   assert.equal(await page.locator('.shell').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(233, 228, 255)');
-  assert.equal(await page.locator('#notifications').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(139, 69, 206)');
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('notifications')).backgroundColor === 'rgb(139, 69, 206)');
   assert.equal(await page.locator('.provider-meter .provider-logo').count(), 2, 'each allowance identifies its provider inside the ring');
   assert.equal(await page.locator('.compact-identity').innerText(), '', 'idle providers must not add a center label or grey dot');
   assert.equal(await page.locator('.compact .small-reading').first().evaluate(el => getComputedStyle(el).getPropertyValue('--sage').trim()), '#b7c8b1', 'app theme must preserve subscription colors');
@@ -166,9 +187,13 @@ try {
   await page.locator('#notch-source').selectOption('claude');
   assert.equal(await page.locator('.compact [data-logo=claude]').count(), 2);
   assert.equal(await page.locator('.compact .small-reading').count(), 2);
-  assert.equal(await page.locator('section[aria-label="Claude usage"] .usage-ring').count(), 2);
+  await overview();
+  assert.equal(await page.locator('[data-subscription="claude"] .overview-limit').count(), 2);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Claude', exact: true }).uncheck();
-  assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 0);
+  await overview();
+  assert.equal(await page.locator('[data-subscription="claude"]').count(), 0);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   assert.equal(await page.locator('.compact [data-logo=codex]').count(), 2);
   await page.getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
   assert.equal(await page.locator('.panel-heading').count(), 0);
@@ -204,6 +229,7 @@ try {
     snapshot.antigravity.accounts = [{ id: 'agy-work', label: 'AGY Work', email: 'agy-work@example.com', groups: snapshot.antigravity.groups, updatedAt: Date.now() / 1000, error: null, active: false }];
     window.testBridge.emit('usage-updated', snapshot);
   });
+  await openSubscription('Codex');
   await page.locator('[data-action="prepare-switch"][data-id="work"]').click();
   assert.match(await page.getByRole('dialog').innerText(), /unsaved work may be lost/);
   assert.match(await page.getByRole('dialog').innerText(), /ChatGPT.exe, Codex.exe, pwsh.exe/);
@@ -222,6 +248,7 @@ try {
   await page.getByRole('checkbox', { name: 'Antigravity', exact: true }).check();
   await page.getByRole('checkbox', { name: 'Codex', exact: true }).uncheck();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSubscription('Antigravity');
   await page.locator('[data-action="switch-agy"][data-id="agy-work"]').click();
   assert.match(await page.getByRole('dialog').innerText(), /Switch Antigravity account/);
   assert.match(await page.getByRole('dialog').innerText(), /agy.exe, pwsh.exe/);
@@ -286,7 +313,13 @@ try {
   await page.getByRole('button', { name: 'Dismiss error', exact: true }).click();
   await page.locator('#warning-codex').focus();
   await page.locator('#warning-codex').fill('36');
-  await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
+  assert.equal(await page.evaluate(() => {
+    const input = document.activeElement;
+    const { snapshot, emit } = window.testBridge;
+    snapshot.health.codex.message = 'Connection status changed during a threshold edit.';
+    emit('usage-updated', snapshot);
+    return input === document.activeElement;
+  }), true, 'connection updates must leave the same threshold input focused');
   assert.equal(await page.locator('#warning-codex').inputValue(), '36', 'background updates must preserve an in-progress threshold edit');
   assert.equal(await page.locator('#warning-codex').evaluate(el => el === document.activeElement), true);
   await page.locator('#warning-codex').dispatchEvent('change');
@@ -304,6 +337,7 @@ try {
   assert.equal(await page.locator('#quiet-end').inputValue(), '07:45');
   await page.locator('#recommendation-purpose').selectOption('work');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSubscription('Codex');
   await page.locator('[data-action="manage"][data-id="work"]').click();
   await page.locator('[data-account-purpose="codex:work"]').selectOption('work');
   assert.equal(await page.locator('[data-recommendation="codex"]').count(), 1);
@@ -315,8 +349,13 @@ try {
   await page.getByRole('button', { name: 'Cancel account switch' }).click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.locator('#recommendation-purpose').selectOption('personal');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSubscription('Codex');
   assert.equal(await page.locator('[data-recommendation="codex"]').count(), 0, 'purpose filtering must use saved account preferences');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.locator('#recommendation-purpose').selectOption('any');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await openSubscription('Antigravity');
   assert.equal(await page.locator('[data-recommendation="antigravity"]').count(), 1);
   await page.locator('[data-recommendation="antigravity"] button').click();
   assert.match(await page.getByRole('dialog').innerText(), /Switch Antigravity account/);
@@ -332,6 +371,7 @@ try {
   assert.equal(await page.locator('#agy-name-agy-work').inputValue(), 'Unsaved AGY name', 'saving account preferences must preserve an unsaved name');
   await page.evaluate(() => window.testBridge.emit('usage-updated', window.testBridge.snapshot));
   assert.equal(await page.locator('#agy-name-agy-work').inputValue(), 'Unsaved AGY name', 'background checks must preserve an unsaved name');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.evaluate(() => { window.testBridge.delayPreferenceSave = true; });
   const beforeQueuedSaves = await page.evaluate(() => window.testBridge.calls.filter(call => call.command === 'update_usage_preferences').length);
   await page.locator('#alert-lowEnabled').check();
@@ -358,7 +398,12 @@ try {
     await page.waitForFunction(() => window.testBridge.releasePreferenceSave);
     await page.locator('#alert-resetEnabled').uncheck();
     if (sourceControl === 'preset') await page.locator('#notch-source').selectOption('claude');
-    else await page.locator('[data-action="set-notch"][data-source="codex"]').click();
+    else {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await openSubscription('Codex');
+      await page.locator('[data-action="set-notch"][data-source="codex"]').click();
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    }
     const source = sourceControl === 'preset' ? 'claude' : 'codex';
     assert.equal(await page.locator('#notch-source').inputValue(), source, `${sourceControl} must supersede a pending custom preview immediately`);
     await page.evaluate(() => { window.testBridge.delayPreferenceSave = false; window.testBridge.releasePreferenceSave(); });
@@ -371,7 +416,7 @@ try {
     assert.equal(await page.locator('#alert-resetEnabled').isChecked(), false, 'changing preview source must retain queued alert changes');
     await page.locator('#alert-resetEnabled').check();
   }
-  // Verify Settings category tabs, theme presets, provider swatches, smart notch, provider filter pills, inline pacing, and hotkey/tray events.
+  // Verify Settings category tabs, theme presets, provider swatches, smart notch, subscription views, inline pacing, and hotkey/tray events.
   await page.locator('[data-action="settings-tab"][data-tab="appearance"]').click();
   assert.equal(await page.locator('[data-action="theme-preset"]').count(), 4);
   await page.locator('[data-action="theme-preset"][data-bg="#141820"]').click();
@@ -386,16 +431,19 @@ try {
     window.testBridge.snapshot.pacing = { 'codex:desktop::fiveHour': { percentagePointsPerHour: 14, estimatedExhaustsAt: Math.floor(Date.now() / 1000) + 3600, resetAt: Math.floor(Date.now() / 1000) + 7200, mayRunOutBeforeReset: true, observedMinutes: 45 } };
     window.testBridge.emit('usage-updated', window.testBridge.snapshot);
   });
+  await openSubscription('Codex');
   assert.equal(await page.locator('.inline-pacing').first().isVisible(), true);
-  await page.locator('[data-action="filter-provider"][data-provider="claude"]').click();
-  assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 1);
-  assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 0);
   await page.getByRole('button', { name: 'Add Codex account', exact: true }).click();
   assert.equal(await page.locator('#account-label').evaluate(el => el === document.activeElement), true);
-  assert.equal(await page.locator('[data-action="filter-provider"][data-provider="codex"]').getAttribute('aria-pressed'), 'true');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.locator('[data-action="filter-provider"][data-provider="all"]').click();
+  await overview();
+  await openSubscription('Claude');
+  assert.equal(await page.locator('section[aria-label="Claude usage"]').count(), 1);
+  assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 0);
+  await overview();
+  await openSubscription('Antigravity');
   assert.equal(await page.locator('section[aria-label="Antigravity usage"]').count(), 1);
+  await overview();
   await page.evaluate(() => {
     window.testBridge.snapshot.alerts = [
       { id: 'codex:demo:5h:low', title: 'Codex (Personal) · 5-hour low', message: 'Codex has 18% remaining.', kind: 'low' },
@@ -435,16 +483,16 @@ try {
   await page.waitForFunction(() => document.getElementById('onboarding-title') === document.activeElement);
   if (process.env.YOUSAGE_UI_SCREENSHOT) await page.screenshot({ path: process.env.YOUSAGE_UI_SCREENSHOT.replace(/\.png$/, '-setup.png') });
   await page.getByRole('checkbox', { name: 'Track Codex' }).uncheck();
-  assert.equal(await page.getByRole('button', { name: 'Open dashboard' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'See usage' }).isDisabled(), true);
   await page.getByRole('checkbox', { name: 'Track Claude' }).check();
-  await page.getByRole('button', { name: 'Open dashboard' }).click();
+  await page.getByRole('button', { name: 'See usage' }).click();
   assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'finish_onboarding').args.providers), ['claude']);
-  assert.equal(await page.getByRole('region', { name: 'Claude usage' }).count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'View Claude details' }).count(), 1);
   assert.equal(await page.getByRole('heading', { name: 'Choose what to track' }).count(), 0);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('#notch-toggle').getAttribute('aria-expanded') === 'false');
   await page.evaluate(() => window.testBridge.emit('tray-open-dashboard'));
-  await page.getByRole('region', { name: 'Claude usage' }).waitFor();
+  await page.getByRole('button', { name: 'View Claude details' }).waitFor();
   assert.equal(await page.locator('#app').evaluate(el => el.classList.contains('pinned')), true);
   assert.deepEqual(failures, []);
   console.log('Desktop UI passed: drag, themes, custom provider/window previews, preference persistence and validation, cooldown health and recovery, Codex/Antigravity filtered suggestions and confirmed switching.');

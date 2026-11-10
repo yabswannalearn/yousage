@@ -8,8 +8,10 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await mkdir('artifacts/docking', { recursive: true });
 try {
-  for (const edge of ['floating', 'top', 'bottom', 'left', 'right']) {
-    await page.goto(`http://127.0.0.1:1420/?preview=1&edge=${edge}`);
+  for (const placement of ['floating', 'floating-up', 'top', 'bottom', 'left', 'right']) {
+    const upward = placement === 'floating-up';
+    const edge = upward ? 'floating' : placement;
+    await page.goto(`http://127.0.0.1:1420/?preview=1&edge=${edge}${upward ? '&up=1' : ''}`);
     const root = page.locator('#app');
     const header = page.locator('#notch-toggle');
     await header.waitFor();
@@ -19,15 +21,41 @@ try {
     assert.equal(await header.locator('svg[role=meter]').count(), 2);
     assert.equal(await header.locator('.reading-reset').count(), 2);
     assert.equal(await header.evaluate(el => el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth), true, `${edge} compact content must fit`);
-    await page.screenshot({ path: `artifacts/docking/${edge}-compact.png` });
-    await root.screenshot({ path: `artifacts/docking/${edge}-notch.png` });
+    await page.screenshot({ path: `artifacts/docking/${placement}-compact.png` });
+    await root.screenshot({ path: `artifacts/docking/${placement}-notch.png` });
+    const compactShell = await page.locator('.shell').boundingBox();
     await header.evaluate(el => el.focus());
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(470);
+    const reveal = await page.locator('.opening .shell').evaluate((shell, { edge, upward, width, height }) => {
+      const animation = shell.getAnimations()[0];
+      const box = shell.getBoundingClientRect();
+      const left = edge === 'left' ? box.left : edge === 'right' ? box.right - width : box.left + (box.width - width) / 2;
+      const top = edge === 'bottom' ? box.bottom - height : upward ? box.bottom - height - 20 : box.top;
+      const center = [left + width / 2, top + height / 2];
+      const beyondWidth = [edge === 'right' ? left - 12 : left + width + 12, center[1]];
+      const beyondHeight = [center[0], edge === 'bottom' || upward ? top - 12 : top + height + 12];
+      const hit = ([x, y]) => shell.contains(document.elementFromPoint(x, y));
+      animation.pause();
+      const duration = animation.effect.getComputedTiming().duration;
+      animation.currentTime = 0;
+      const start = [hit(center), hit(beyondWidth), hit(beyondHeight)];
+      const startClip = getComputedStyle(shell).clipPath;
+      animation.currentTime = duration / 2;
+      const middleClip = getComputedStyle(shell).clipPath;
+      animation.currentTime = duration;
+      const end = [hit(center), hit(beyondWidth), hit(beyondHeight)];
+      const endClip = getComputedStyle(shell).clipPath;
+      animation.play();
+      return { start, end, interpolates: middleClip !== startClip && middleClip !== endClip };
+    }, { edge, upward, width: compactShell.width, height: compactShell.height });
+    assert.deepEqual(reveal.start, [true, false, false], `${placement} reveal starts within the compact outline`);
+    assert.equal(reveal.interpolates, true, `${placement} reveal has an intermediate outline`);
+    assert.deepEqual(reveal.end, [true, true, true], `${placement} reveal grows on both axes`);
+    await page.waitForFunction(() => !document.querySelector('.opening'));
     assert.equal(await header.getAttribute('aria-expanded'), 'true');
     assert.equal(Math.round((await root.boundingBox()).width), ['top', 'bottom'].includes(edge) ? 480 : 440);
     assert.equal(await page.locator('.panel-scroll').evaluate(el => el.scrollWidth <= el.clientWidth), true, `${edge} detail text must fit horizontally`);
-    await page.screenshot({ path: `artifacts/docking/${edge}-expanded.png` });
+    await page.screenshot({ path: `artifacts/docking/${placement}-expanded.png` });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(320);
     assert.equal(await header.getAttribute('aria-expanded'), 'false');
