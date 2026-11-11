@@ -93,6 +93,6 @@ For UI changes, install Chromium with `npx playwright install chromium`, start `
 
 ## License and credits
 
-YouSage's source code is licensed under the [MIT License](LICENSE).
+YouSage's source code is dual-licensed under the [MIT License](LICENSE) or [Apache License 2.0](LICENSE-APACHE), at your option.
 
 YouSage is an independent project. The provider marks identify their corresponding usage sources. [ChatGPT favicon](https://chatgpt.com/cdn/assets/favicon-o20kmmos.svg) · [Claude icon](https://claude.com/icon.svg) · [Antigravity press assets](https://antigravity.google/press)
