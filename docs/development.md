@@ -9,7 +9,7 @@ npm run tauri dev
 
 Build the standalone executable with `npm run build:desktop` or include the NSIS installer with `npm run tauri build`. The Windows CI workflow runs the frontend build, TypeScript and Rust tests, and browser walkthroughs on pull requests.
 
-The release workflow runs `tests/installer-smoke.ps1` on a clean Windows runner. It installs the published v0.1.0 package, launches it, upgrades to the candidate package, checks that local data survived, and uninstalls it. The workflow accepts a manual dispatch for an installer check before tagging.
+The release workflow runs `tests/installer-smoke.ps1` on a clean Windows runner. It installs the published v0.1.0 package, launches it, upgrades to the candidate package, checks that local data survived, and uninstalls it. The workflow accepts a manual dispatch for an installer check before tagging. Tagged builds must match the bundled version and publish the tested installer as `YouSage-x64-setup.exe` so the latest-download URL stays stable. The app checks GitHub Releases for newer versions and opens the installer download on request.
 
 Keep the standalone executable and installer signed with the same trusted publisher identity once a signing identity is available. Configure [Tauri Windows signing](https://v2.tauri.app/distribute/sign/windows/) in the release workflow, then verify both final artifacts with `Get-AuthenticodeSignature` before upload. Review the [SmartScreen reputation guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) when rolling out signed builds.
 
