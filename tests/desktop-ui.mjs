@@ -159,6 +159,14 @@ try {
   await page.locator('[data-tab="system"]').focus();
   await page.keyboard.press('Enter');
   assert.equal(await page.locator('[data-tab="system"]').evaluate(el => el === document.activeElement), true);
+  const installerUrl = 'https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/YouSage-x64-setup.exe';
+  await page.evaluate(installerUrl => {
+    const { snapshot, emit } = window.testBridge;
+    snapshot.update = { ...snapshot.update, latestVersion: '0.2.0', installerUrl, updateAvailable: true };
+    emit('usage-updated', snapshot);
+  }, installerUrl);
+  await page.getByRole('button', { name: 'Download update', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.testBridge.calls.find(call => call.command === 'open_release_url').args), { url: installerUrl });
   await page.locator('[data-tab="all"]').click();
   await page.getByLabel('App background', { exact: true }).fill('#e9e4ff');
   await page.getByLabel('UI accent', { exact: true }).fill('#8b45ce');

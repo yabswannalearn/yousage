@@ -514,17 +514,20 @@ mod tests {
         assert!(is_newer_version("0.1.0", "v0.2.0"));
         assert!(!is_newer_version("0.1.0", "v0.1.0"));
         assert!(!is_newer_version("0.2.0", "0.1.9"));
-        let status = parse_github_release(&json!({
-            "tag_name": "v0.2.0",
-            "html_url": "https://github.com/yabswannalearn/yousage/releases/tag/v0.2.0",
-            "assets": [
-                {"name": "yousage.exe", "browser_download_url": "https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/yousage.exe"},
-                {"name": "YouSage_0.2.0_x64-setup.exe", "browser_download_url": "https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/YouSage_0.2.0_x64-setup.exe"}
-            ]
-        }), "0.1.0");
-        assert!(status.update_available);
-        assert_eq!(status.latest_version.as_deref(), Some("0.2.0"));
-        assert_eq!(status.installer_url.as_deref(), Some("https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/YouSage_0.2.0_x64-setup.exe"));
+        for installer in ["YouSage-x64-setup.exe", "YouSage_0.2.0_x64-setup.exe"] {
+            let installer_url = format!("https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/{installer}");
+            let status = parse_github_release(&json!({
+                "tag_name": "v0.2.0",
+                "html_url": "https://github.com/yabswannalearn/yousage/releases/tag/v0.2.0",
+                "assets": [
+                    {"name": "yousage.exe", "browser_download_url": "https://github.com/yabswannalearn/yousage/releases/download/v0.2.0/yousage.exe"},
+                    {"name": installer, "browser_download_url": &installer_url}
+                ]
+            }), "0.1.0");
+            assert!(status.update_available);
+            assert_eq!(status.latest_version.as_deref(), Some("0.2.0"));
+            assert_eq!(status.installer_url.as_deref(), Some(installer_url.as_str()));
+        }
     }
 
     #[test]

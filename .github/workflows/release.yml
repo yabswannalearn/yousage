@@ -45,9 +45,14 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "The release tag must match the bundled version v$version."
+          }
           $setup = Get-Item "src-tauri/target/release/bundle/nsis/YouSage_${version}_x64-setup.exe"
-          ./tests/installer-smoke.ps1 -Installer $setup.FullName -Version $version
-          "YOUSAGE_SETUP_EXE=$($setup.FullName)" >> $env:GITHUB_ENV
+          $releaseSetup = Join-Path $env:RUNNER_TEMP 'YouSage-x64-setup.exe'
+          Copy-Item -LiteralPath $setup.FullName -Destination $releaseSetup
+          ./tests/installer-smoke.ps1 -Installer $releaseSetup -Version $version
+          "YOUSAGE_SETUP_EXE=$releaseSetup" >> $env:GITHUB_ENV
 
       - name: Upload installers to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -55,7 +60,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = $env:GITHUB_REF_NAME
           $setup = Get-Item $env:YOUSAGE_SETUP_EXE
           $exe = Get-Item "src-tauri/target/release/yousage.exe"
           if (-not (gh release view $tag 2>$null)) {
