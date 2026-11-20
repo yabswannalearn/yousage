@@ -52,6 +52,7 @@ import {
 const native = isTauri();
 const params = new URLSearchParams(location.search);
 const preview = !native && params.has('preview');
+const embeddedPreview = preview && params.has('embed');
 const root = document.querySelector<HTMLElement>('#app')!;
 let snapshot: Snapshot = {
   accounts: [],
@@ -76,8 +77,31 @@ const REVEAL_DELAY_MS = 200;
 const REVEAL_STRIP_PX = 8;
 let upward = false;
 type DockEdge = 'floating' | 'top' | 'bottom' | 'left' | 'right';
-type NotchLayout = { upward: boolean; height: number; width?: number; edge?: DockEdge; compactOffsetY?: number };
+type NotchLayout = { upward: boolean; height: number; width?: number; edge?: DockEdge; compactOffsetY?: number; x?: number; y?: number };
 let dockEdge: DockEdge = 'floating';
+let previewAnchor: { x: number; y: number } | undefined;
+
+function embeddedLayout(open: boolean, requestedHeight: number): NotchLayout {
+  const side = dockEdge === 'left' || dockEdge === 'right';
+  const compactHeight = side ? 184 : dockEdge === 'floating' ? 80 : 40;
+  const panelWidth = side || dockEdge === 'floating' ? 440 : 480;
+  const width = Math.min(innerWidth, side && !open ? 58 : panelWidth);
+  const anchorX = previewAnchor?.x ?? (innerWidth - width) / 2;
+  const anchorY = previewAnchor?.y ?? 32;
+  const compactY = Math.max(0, Math.min(anchorY, innerHeight - compactHeight));
+  const wanted = open ? Math.max(compactHeight, requestedHeight) : compactHeight;
+  const below = innerHeight - compactY;
+  const above = compactY + compactHeight;
+  const upward = dockEdge === 'bottom' || (dockEdge === 'floating' && wanted > below && above > below);
+  const available = dockEdge === 'floating' ? upward ? above : below : innerHeight;
+  const height = Math.min(wanted, available);
+  const x = dockEdge === 'left' ? 0 : dockEdge === 'right' ? innerWidth - width
+    : Math.max(0, Math.min(anchorX, innerWidth - width));
+  const y = dockEdge === 'top' ? 0 : dockEdge === 'bottom' ? innerHeight - height
+    : side ? Math.min(compactY, innerHeight - height) : upward ? above - height : compactY;
+  return { edge: dockEdge, width, height, x, y, upward, compactOffsetY: compactY - y };
+}
+
 function applyLayout(layout: NotchLayout) {
   upward = layout.upward;
   dockEdge = layout.edge ?? 'floating';
@@ -88,6 +112,10 @@ function applyLayout(layout: NotchLayout) {
   if (preview) {
     root.style.width = `${layout.width ?? 440}px`;
     root.style.height = `${layout.height}px`;
+  }
+  if (layout.x !== undefined && layout.y !== undefined) {
+    root.style.left = `${layout.x}px`;
+    root.style.top = `${layout.y}px`;
   }
 }
 type SettingsTab = 'all' | 'general' | 'appearance' | 'alerts' | 'system';
@@ -160,6 +188,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (native) return invoke<T>(command, args);
   if (!preview) throw new Error('Open the YouSage desktop app to connect your accounts.');
   if (command === 'set_expanded') {
+    if (embeddedPreview) return embeddedLayout(Boolean(args?.expanded), Number(args?.height ?? 80)) as T;
     const edge = dockEdge;
     const side = edge === 'left' || edge === 'right';
     const compact = side ? 184 : edge === 'floating' ? 80 : 40;
@@ -824,7 +853,10 @@ function render(autoSync = true) {
     root.classList.toggle('opening', opening);
     root.classList.toggle('preparing-open', preparingOpen);
     if (!transition) root.classList.remove('closing');
-    const title = expanded ? (pinned ? 'Pinned open · click outside to close' : 'Click to pin open · drag the header to move') : 'Rest the pointer along the top edge to open · Alt+Shift+U';
+    const title = embeddedPreview
+      ? expanded ? 'Press to collapse · drag to move' : 'Hover or press to open'
+      : expanded ? pinned ? 'Pinned open · click outside to close' : 'Click to pin open · drag the header to move'
+      : 'Rest the pointer along the top edge to open · Alt+Shift+U';
     const attributes = { 'data-status': status, 'aria-expanded': String(expanded), style: accentVariables(providers[0] ?? 'codex'), title };
     for (const [name, value] of Object.entries(attributes)) {
       if (compact.getAttribute(name) !== value) compact.setAttribute(name, value);
@@ -889,7 +921,7 @@ function render(autoSync = true) {
       `<button type="button" class="panel-tool" data-action="refresh" aria-label="Refresh usage">${icon('refresh')}<span>Refresh</span></button>
       <button type="button" class="panel-tool" data-action="history">${icon('history')}<span>History</span></button>
       <button type="button" class="panel-tool" data-action="settings">${icon('settings')}<span>Settings</span></button>
-      <div class="footer-tools">${iconButton('privacy', 'privacy', 'Toggle privacy mode')}${iconButton('hide', 'hide', 'Hide to system tray')}</div>`)) sizeChanged = true;
+      <div class="footer-tools">${iconButton('privacy', 'privacy', 'Toggle privacy mode')}${embeddedPreview ? '' : iconButton('hide', 'hide', 'Hide to system tray')}</div>`)) sizeChanged = true;
     if (!firstRun) {
       const refresh = footer.querySelector<HTMLButtonElement>('[data-action="refresh"]')!;
       refresh.disabled = snapshot.refreshing || Boolean(snapshot.switching);
@@ -1062,16 +1094,26 @@ function pinOpen() {
   root.classList.add('pinned');
   const indicator = root.querySelector('.expand-icon');
   if (indicator) updateRegion(indicator, icon('pin'));
-  root.querySelector('#notch-toggle')?.setAttribute('title', 'Pinned open · click outside to minimize');
+  if (!embeddedPreview) root.querySelector('#notch-toggle')?.setAttribute('title', 'Pinned open · click outside to minimize');
 }
 
 root.addEventListener('click', event => {
-  if (expanded && !suppressToggleClick) pinOpen();
   const target = (event.target as Element).closest<HTMLElement>('[data-action]');
+  if (embeddedPreview && target?.dataset.action === 'toggle') {
+    if (dragging || (suppressToggleClick && event.detail !== 0)) return;
+    if (expanded) {
+      revealLatched = true;
+      void requestClose();
+    } else {
+      pinOpen();
+      void attempt(() => toggle(true));
+    }
+    return;
+  }
+  if (expanded && !suppressToggleClick) pinOpen();
   if (!target || (target instanceof HTMLButtonElement && target.disabled)) return;
   const id = target.dataset.id;
   switch (target.dataset.action) {
-    case 'toggle': break;
     case 'finish-onboarding':
     case 'skip-onboarding':
       void attempt(async () => {
@@ -1361,11 +1403,70 @@ document.addEventListener('pointerdown', event => {
   if (!root.querySelector('.shell')?.contains(event.target as Node)) void requestClose();
 });
 
+function dragEmbeddedNotch(header: HTMLElement, event: PointerEvent) {
+  const origin = root.getBoundingClientRect();
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const pointerId = event.pointerId;
+  const listeners = new AbortController();
+  header.setPointerCapture(pointerId);
+
+  header.addEventListener('pointermove', move => {
+    if (move.pointerId !== pointerId) return;
+    const dx = move.clientX - startX;
+    const dy = move.clientY - startY;
+    if (!dragging && Math.hypot(dx, dy) < 5) return;
+    dragging = true;
+    suppressToggleClick = true;
+    root.style.translate = `${dx}px ${dy}px`;
+  }, { signal: listeners.signal });
+
+  const finish = (end: PointerEvent) => {
+    if (end.pointerId !== pointerId) return;
+    listeners.abort();
+    if (!dragging) return;
+    dragging = false;
+    root.style.removeProperty('translate');
+    if (end.type !== 'pointerup') return;
+    const dx = end.clientX - startX;
+    const dy = end.clientY - startY;
+    const x = origin.left + dx;
+    const y = (upward ? origin.bottom - 80 : origin.top) + dy;
+    // Snap the top lip like the desktop window. Use pointer proximity for the
+    // other edges so a panel spanning the demo still has room to float.
+    const gaps: [DockEdge, number][] = [
+      ['top', upward ? Math.abs(end.clientY) : Math.min(Math.abs(origin.top + dy), Math.abs(end.clientY))],
+      ['bottom', Math.abs(innerHeight - end.clientY)],
+      ['left', Math.abs(end.clientX)], ['right', Math.abs(innerWidth - end.clientX)],
+    ];
+    gaps.sort((a, b) => a[1] - b[1]);
+    dockEdge = gaps[0][1] <= 28 ? gaps[0][0] : 'floating';
+    const centered = Math.abs(x + origin.width / 2 - innerWidth / 2) <= 32;
+    previewAnchor = {
+      x: centered ? (innerWidth - (dockEdge === 'top' || dockEdge === 'bottom' ? 480 : 440)) / 2 : x,
+      y,
+    };
+    applyLayout(embeddedLayout(true, desiredHeight));
+    desiredHeight = 0;
+    void syncHeight();
+  };
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+    header.addEventListener(type, finish, { signal: listeners.signal });
+  }
+}
+
 root.addEventListener('pointerdown', event => {
+  if (embeddedPreview && (!event.isPrimary || dragging)) return;
   colorPickerOpen = Boolean((event.target as HTMLElement).dataset.color || (event.target as HTMLElement).dataset.theme);
-  if (event.button !== 0 || !(event.target as Element).closest('#notch-toggle')) return;
+  const header = (event.target as Element).closest<HTMLElement>('#notch-toggle');
+  if (embeddedPreview) suppressToggleClick = false;
+  if (event.button !== 0 || !header || transition) return;
   suppressToggleClick = false;
-  if (!native || transition) return;
+  if (embeddedPreview && expanded) {
+    dragEmbeddedNotch(header, event);
+    return;
+  }
+  if (!native) return;
   const origin = { x: event.screenX, y: event.screenY };
   const cleanup = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', cleanup); window.removeEventListener('pointercancel', cleanup); };
   const move = (next: PointerEvent) => {
@@ -1381,7 +1482,7 @@ root.addEventListener('pointerdown', event => {
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && colorPickerOpen) { colorPickerOpen = false; render(); return; }
   if (((event.target as HTMLElement).dataset.color || (event.target as HTMLElement).dataset.theme) && ['Enter', ' '].includes(event.key)) colorPickerOpen = true;
-  if (['Enter', ' '].includes(event.key) && (event.target as Element).closest('#notch-toggle')) {
+  if (!embeddedPreview && ['Enter', ' '].includes(event.key) && (event.target as Element).closest('#notch-toggle')) {
     event.preventDefault();
     pinOpen();
     if (!expanded) void attempt(() => toggle(true));
@@ -1393,6 +1494,14 @@ window.addEventListener('keydown', event => {
 async function start() {
   if (preview) {
     document.documentElement.classList.add('browser-preview');
+    if (embeddedPreview) {
+      document.documentElement.classList.add('embedded-preview');
+      snapshot.settings.notchSource = 'custom';
+      snapshot.settings.usagePreferences = usagePreferences({
+        usagePreferences: { notchProviders: ['codex', 'claude', 'antigravity'] },
+      });
+      snapshot.settings.appTheme = { background: '#151f33', accent: '#9bbfff' };
+    }
     root.style.height = '80px';
     const now = Math.floor(Date.now() / 1000);
     snapshot = {
@@ -1427,7 +1536,12 @@ async function start() {
     if (previewEdge && ['top', 'bottom', 'left', 'right'].includes(previewEdge)) dockEdge = previewEdge as DockEdge;
     applyLayout(await call<NotchLayout>('set_expanded', { expanded: false, height: 80 }));
     render();
-    if (params.has('expanded')) await toggle(true);
+    if (embeddedPreview) pinOpen();
+    if (embeddedPreview || params.has('expanded')) await toggle(true);
+    if (embeddedPreview) window.addEventListener('resize', () => {
+      applyLayout(embeddedLayout(expanded, desiredHeight));
+      if (expanded) { desiredHeight = 0; void syncHeight(); }
+    });
     return;
   }
   if (!native) {
