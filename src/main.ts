@@ -483,7 +483,7 @@ function connectionHealthSettings() {
     const fallback = provider === 'codex' ? snapshot.accounts.find(account => isActiveAccount(account, snapshot.accounts, snapshot.activeAccountId)) : snapshot[provider];
     const health = snapshot.health?.[provider];
     const ready = health?.status === 'ready';
-    const coolingDown = Boolean(health?.nextRetryAt && health.nextRetryAt > Date.now() / 1000 && (provider === 'claude' || health.status === 'rateLimited'));
+    const coolingDown = Boolean(health?.nextRetryAt && health.nextRetryAt > Date.now() / 1000 && health.status === 'rateLimited');
     return `<div class="health-card" ${accentStyle(provider)}><div class="health-heading"><strong>${providerNames[provider]}</strong><span class="health-status ${health && !ready ? 'attention' : ''}">${health ? statusNames[health.status] : fallback?.error ? 'Needs attention' : fallback?.updatedAt ? 'Connected' : 'Not checked'}</span></div><p class="fine-print" data-last-check="${health?.lastSuccessAt ?? fallback?.updatedAt ?? ''}">${esc(elapsedLabel(health?.lastSuccessAt ?? fallback?.updatedAt))}</p>${health?.message ? `<p class="health-message">${esc(health.message)}</p>` : ''}<div class="health-actions"><span class="fine-print" data-retry-at="${health?.nextRetryAt ?? ''}" data-retry-ready="${ready}">${esc(retryLabel(health?.nextRetryAt).replace(ready ? 'Next retry' : 'Never replace', 'Next check'))}</span><button type="button" class="text-button" data-action="refresh-health" data-provider="${provider}" ${snapshot.refreshing || coolingDown ? 'disabled' : ''}>${coolingDown ? 'Waiting to retry' : 'Refresh'}</button>${health?.recoveryCommand ? `<button type="button" class="text-button" data-action="copy-recovery" data-command="${esc(health.recoveryCommand)}">Copy sign-in command</button>` : ''}</div></div>`;
   }).join('')}</div>`;
 }
@@ -1112,7 +1112,7 @@ root.addEventListener('click', event => {
     case 'refresh-health': {
       const provider = target.dataset.provider as Provider;
       const health = snapshot.health?.[provider];
-      if (health?.nextRetryAt && health.nextRetryAt > Date.now() / 1000 && (provider === 'claude' || health.status === 'rateLimited')) return;
+      if (health?.nextRetryAt && health.nextRetryAt > Date.now() / 1000 && health.status === 'rateLimited') return;
       void attempt(() => call('refresh_usage')); break;
     }
     case 'copy-recovery': void attempt(async () => { await navigator.clipboard.writeText(target.dataset.command ?? ''); notice = 'Sign-in command copied. Run it in your terminal, then refresh usage.'; }); break;
@@ -1490,7 +1490,7 @@ setInterval(() => {
     const button = label.parentElement?.querySelector<HTMLButtonElement>('[data-action="refresh-health"]');
     const provider = button?.dataset.provider as Provider | undefined;
     const health = provider ? snapshot.health?.[provider] : null;
-    const cooldown = Boolean(at && at > Date.now() / 1000 && (provider === 'claude' || health?.status === 'rateLimited'));
+    const cooldown = Boolean(at && at > Date.now() / 1000 && health?.status === 'rateLimited');
     if (button) {
       button.disabled = snapshot.refreshing || cooldown;
       const text = cooldown ? 'Waiting to retry' : 'Refresh';

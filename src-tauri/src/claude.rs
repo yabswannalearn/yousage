@@ -90,7 +90,11 @@ fn parse_http_response(response: &str) -> Result<Value, (String, u64)> {
     }
 }
 
-pub async fn refresh(app: &AppHandle) {
+fn should_skip_refresh(requested: bool, known_auth_change: bool, rate_limited: bool, now: u64, next_refresh: u64) -> bool {
+    !known_auth_change && !(requested && !rate_limited) && now < next_refresh
+}
+
+pub async fn refresh(app: &AppHandle, requested: bool) {
     let state = app.state::<AppState>();
     let sign_in = read_sign_in();
     let (token, email, plan) = match sign_in {
@@ -112,10 +116,13 @@ pub async fn refresh(app: &AppHandle) {
     let fingerprint: [u8; 32] = Sha256::digest(token.as_bytes()).into();
     let previous_fingerprint = *state.claude_token_fingerprint.lock().unwrap();
     let changed_token = previous_fingerprint.as_ref() != Some(&fingerprint);
-    let cached_email = state.snapshot.lock().unwrap().claude.email.clone();
+    let (cached_email, rate_limited) = {
+        let snapshot = state.snapshot.lock().unwrap();
+        (snapshot.claude.email.clone(), snapshot.health.claude.status == HealthStatus::RateLimited)
+    };
     let changed_account = cached_email != email || (email.is_none() && changed_token);
     let known_auth_change = cached_email.as_ref().zip(email.as_ref()).is_some_and(|(old, current)| !old.eq_ignore_ascii_case(current));
-    if !known_auth_change && (now() as u64) < state.claude_next_refresh.load(Ordering::SeqCst) {
+    if should_skip_refresh(requested, known_auth_change, rate_limited, now() as u64, state.claude_next_refresh.load(Ordering::SeqCst)) {
         if changed_account {
             let mut snapshot = state.snapshot.lock().unwrap();
             let accounts = snapshot.claude.accounts.clone();
@@ -241,5 +248,14 @@ mod tests {
         assert_eq!(parse_http_response(immediate).unwrap_err().1, 900);
         assert!(parse_http_response("HTTP/2 401\r\n\r\n{}\n401").unwrap_err().0.contains("claude auth login"));
         assert!(parse_http_response("malformed response").is_err());
+    }
+
+    #[test]
+    fn manual_refresh_bypasses_normal_cooldown_but_respects_rate_limit() {
+        assert!(should_skip_refresh(false, false, false, 100, 400));
+        assert!(!should_skip_refresh(true, false, false, 100, 400));
+        assert!(should_skip_refresh(true, false, true, 100, 1000));
+        assert!(!should_skip_refresh(true, true, true, 100, 1000));
+        assert!(!should_skip_refresh(false, false, true, 1000, 1000));
     }
 }

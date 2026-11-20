@@ -364,7 +364,7 @@ async fn refresh(app: AppHandle, requested: bool) {
     });
     let claude_refresh = claude.then(|| {
         let app = app.clone();
-        tauri::async_runtime::spawn(async move { crate::claude::refresh(&app).await })
+        tauri::async_runtime::spawn(async move { crate::claude::refresh(&app, requested).await })
     });
     if antigravity { refresh_antigravity(&app, requested).await; }
     if let Some(task) = codex_refresh { let _ = task.await; }
