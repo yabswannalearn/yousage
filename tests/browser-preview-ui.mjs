@@ -15,6 +15,10 @@ try {
   });
   for (const method of ['click', 'press']) {
     await page.goto(base);
+    assert.equal(
+      await page.getByRole('link', { name: 'Download Setup Wizard for Windows' }).getAttribute('href'),
+      'https://github.com/yabswannalearn/yousage/releases/latest/download/YouSage-x64-setup.exe',
+    );
     const link = page.getByRole('link', { name: 'Open the interface preview' });
     if (method === 'click') await link.click();
     else await link.press('Enter');
