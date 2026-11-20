@@ -507,7 +507,13 @@ function customPreviewSettings() {
   const prefs = preferences();
   const providers = notchProviders(snapshot.settings.notchSource, prefs, []);
   const group = selectedAntigravityGroup(snapshot.antigravity, snapshot.settings.notchSource);
-  return `<div class="custom-preview"><div class="preview-providers" role="group" aria-label="Providers in notch">${(Object.keys(providerNames) as Provider[]).map(provider => `<label for="preview-${provider}" ${accentStyle(provider)}><input id="preview-${provider}" type="checkbox" aria-label="${providerNames[provider]} in notch" data-notch-provider="${provider}" ${providers.includes(provider) ? 'checked' : ''}/><span>${providerNames[provider]}${!visible(provider) ? ' · hidden' : ''}</span></label>`).join('')}</div><label class="setting-row" for="notch-window"><span>Preview window</span><select id="notch-window"><option value="limiting" ${prefs.notchWindow === 'limiting' ? 'selected' : ''}>Lowest remaining</option><option value="fiveHour" ${prefs.notchWindow === 'fiveHour' ? 'selected' : ''}>5 hour</option><option value="weekly" ${prefs.notchWindow === 'weekly' ? 'selected' : ''}>Weekly</option></select></label>${snapshot.antigravity.groups.length ? `<label class="setting-row" for="notch-group"><span>Antigravity group</span><select id="notch-group">${snapshot.antigravity.groups.map(item => `<option value="${esc(item.id)}" ${group?.id === item.id ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></label>` : ''}<label class="setting-row" for="smart-notch"><span>Smart auto-focus low allowance</span><input id="smart-notch" class="switch" type="checkbox" ${prefs.smartNotch ? 'checked' : ''}/></label><p class="fine-print">Combine any providers. Lowest remaining shows the tightest allowance for each. Smart auto-focus temporarily promotes low subscriptions.</p></div>`;
+  const positions = providers.length === 3 ? ['First', 'Middle', 'Last'] : ['First', 'Last'];
+  const order = providers.length > 1 ? `<div class="preview-order" role="group" aria-label="Notch order">${providers.map((current, index) => {
+    const id = `notch-position-${index}`;
+    const options = providers.map(provider => `<option value="${provider}" ${provider === current ? 'selected' : ''}>${providerNames[provider]}</option>`).join('');
+    return `<label for="${id}"><span>${positions[index]}</span><select id="${id}" data-notch-position="${index}">${options}</select></label>`;
+  }).join('')}</div>` : '';
+  return `<div class="custom-preview"><div class="preview-providers" role="group" aria-label="Providers in notch">${(Object.keys(providerNames) as Provider[]).map(provider => `<label for="preview-${provider}" ${accentStyle(provider)}><input id="preview-${provider}" type="checkbox" aria-label="${providerNames[provider]} in notch" data-notch-provider="${provider}" ${providers.includes(provider) ? 'checked' : ''}/><span>${providerNames[provider]}${!visible(provider) ? ' · hidden' : ''}</span></label>`).join('')}</div>${order}<label class="setting-row" for="notch-window"><span>Preview window</span><select id="notch-window"><option value="limiting" ${prefs.notchWindow === 'limiting' ? 'selected' : ''}>Lowest remaining</option><option value="fiveHour" ${prefs.notchWindow === 'fiveHour' ? 'selected' : ''}>5 hour</option><option value="weekly" ${prefs.notchWindow === 'weekly' ? 'selected' : ''}>Weekly</option></select></label>${snapshot.antigravity.groups.length ? `<label class="setting-row" for="notch-group"><span>Antigravity group</span><select id="notch-group">${snapshot.antigravity.groups.map(item => `<option value="${esc(item.id)}" ${group?.id === item.id ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></label>` : ''}<label class="setting-row" for="smart-notch"><span>Smart auto-focus low allowance</span><input id="smart-notch" class="switch" type="checkbox" ${prefs.smartNotch ? 'checked' : ''}/></label><p class="fine-print">Lowest remaining shows the tightest allowance for each provider. Smart auto-focus temporarily promotes low subscriptions.</p></div>`;
 }
 
 const accentVariables = (provider: Provider) => {
@@ -1247,14 +1253,23 @@ root.addEventListener('change', event => {
     void attempt(async () => { await call('update_history_settings', { retentionDays: Number(input.value) }); snapshot = await call<Snapshot>('get_snapshot'); });
     return;
   }
-  if (input.dataset.notchProvider || input.id === 'notch-window' || input.id === 'notch-group' || input.id === 'notch-source' && input.value === 'custom') {
+  const notchPosition = input.dataset.notchPosition;
+  if (notchPosition !== undefined || input.dataset.notchProvider || input.id === 'notch-window' || input.id === 'notch-group' || input.id === 'notch-source' && input.value === 'custom') {
     const prefs = preferences();
     const currentProviders = notchProviders(snapshot.settings.notchSource, prefs, []);
     const chosen = input.dataset.notchProvider ? currentProviders.filter(provider => provider !== input.dataset.notchProvider).concat(input.checked ? [input.dataset.notchProvider as Provider] : []) : currentProviders;
     if (!chosen.length) { input.checked = true; error = 'Choose at least one provider for the notch.'; render(); return; }
+    if (notchPosition !== undefined) {
+      const position = Number(notchPosition);
+      const previous = chosen.findIndex(provider => provider === input.value);
+      if (!chosen[position] || previous < 0 || previous === position) return;
+      [chosen[position], chosen[previous]] = [chosen[previous], chosen[position]];
+    }
     const notchWindow = input.id === 'notch-window' ? input.value as UsagePreferences['notchWindow'] : prefs.notchWindow;
     const group = root.querySelector<HTMLSelectElement>('#notch-group')?.value;
-    void attempt(() => savePreferences({ ...prefs, notchProviders: chosen, notchWindow }, group ? `custom:${group}` : 'custom'));
+    const source = notchPosition !== undefined && snapshot.settings.notchSource.startsWith('custom')
+      ? snapshot.settings.notchSource : group ? `custom:${group}` : 'custom';
+    void attempt(() => savePreferences({ ...prefs, notchProviders: chosen, notchWindow }, source));
     return;
   }
   if (input.id === 'notch-source') {
