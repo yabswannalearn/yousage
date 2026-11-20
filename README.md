@@ -1,70 +1,59 @@
 # YouSage
 
-![YouSage icon](src-tauri/icons/64x64.png)
+YouSage is a small Windows desktop companion for checking **Codex**, **Google Antigravity**, and **Claude Code** allowances. Glance at how much usage you have left and when it resets from a movable notch, then open the Detail panel to see your accounts and model quotas.
 
-YouSage is a Windows desktop notch for tracking **OpenAI Codex**, **Google Antigravity**, and **Claude Code** allowances. See how much usage you have left, when it resets, and which coding session is working.
+[Download Setup Wizard for Windows](https://github.com/yabswannalearn/yousage/releases/latest/download/YouSage-x64-setup.exe) · [Try the demo](https://yabswannalearn.github.io/yousage/?preview=1&expanded=1) · [Build from source](#build-from-source) · [Contribute](CONTRIBUTING.md)
 
-[Download for Windows](https://github.com/yabswannalearn/yousage/releases/latest) · [Try the browser demo](https://yabswannalearn.github.io/yousage/?preview=1&expanded=1) · [Build from source](#build-from-source) · [Report an issue](https://github.com/yabswannalearn/yousage/issues)
-
-## Features
-
-- See five-hour and weekly allowances, Antigravity model quotas such as Argon, and Claude's separate Fable weekly limit when the account reports one.
-- Track coding sessions as **Rest**, **Working**, **Needs permission**, or **Finished**. The compact notch shows a working conversation with its provider logo and a `+N` count for additional sessions.
-- Save multiple accounts and switch between them. You can also enable automatic switching when a provider reaches 0% remaining.
-- Choose which providers and allowance windows appear in the notch, dock it to a screen edge, and customize the theme and provider colors.
-- Set low-allowance and reset alerts, review local usage trends, and export history as CSV.
+![YouSage Detail panel with Codex, Claude, and Antigravity notch counters in that order, using demo data](docs/images/usage-overview.png)
 
 ## Install on Windows
 
-YouSage runs on Windows 10 and 11 x64 with Microsoft Edge WebView2. Download the per-user **Setup Wizard** or the standalone **`yousage.exe`** from [GitHub Releases](https://github.com/yabswannalearn/yousage/releases/latest).
+YouSage targets **Windows 10 and 11 (x64)** and uses the Microsoft Edge WebView2 Runtime. Open the downloaded `YouSage-x64-setup.exe` to install YouSage for your Windows account. The release page also includes the standalone `yousage.exe`. [Release notes and assets](https://github.com/yabswannalearn/yousage/releases/latest)
 
-This README describes `main`. The `v0.1.0` installer predates Fable, coding session status, and automatic switching. Build from source to use those features.
+The screenshot, browser demo, and instructions below describe `main`. The published [v0.1.0 release](https://github.com/yabswannalearn/yousage/releases/tag/v0.1.0) covers Codex and Antigravity usage. [Build from source](#build-from-source) to try the newer Detail panel, Claude Code support, coding session status, and automatic switching.
 
-To verify a download, compare its SHA-256 hash against the digest listed for that asset on GitHub Releases. In PowerShell, run `Get-FileHash .\yousage.exe -Algorithm SHA256`, substituting the filename you downloaded. Releases currently use unsigned Windows binaries. See the [security policy](SECURITY.md) for private vulnerability reports.
+The published Windows binaries are unsigned. To verify a download, compare its SHA-256 hash with the digest for that asset on GitHub Releases. Replace the filename in this PowerShell command if you downloaded the standalone executable.
 
-## Connect your accounts
+```powershell
+Get-FileHash -LiteralPath .\YouSage-x64-setup.exe -Algorithm SHA256
+```
 
-Install and sign in to the tools for the providers you want to track.
-The Detail panel opens on first launch so you can choose which subscriptions to track. After setup, the panel opens to a subscription overview with allowance and reset times. Select **Open usage details** in the Windows system tray to return at any time.
+### Update an existing installation
 
-| Provider | Setup |
+Download the latest Setup Wizard, quit YouSage from the tray, and run the wizard over your existing installation to keep your settings and history. On builds from `main`, open **Settings → System → Desktop & updates** to check for a newer release and select **Download update** when one is available.
+
+## Get started
+
+1. Install and sign in to the tools for the subscriptions you want to track.
+2. Launch YouSage and choose your subscriptions in the first-run setup.
+3. Hover over the top edge of the notch to open the Detail panel, or choose **Open usage details** from the Windows system tray.
+
+| Subscription | Sign-in and account setup |
 | --- | --- |
-| Codex | Sign in to Codex on this PC. YouSage detects the active sign-in. Use **Add Codex account** to connect additional ChatGPT accounts through your browser. |
-| Antigravity | Install and sign in to the `agy` CLI. YouSage reads its model quotas. Use **Save sign-in** to keep an account available before signing in to another. |
-| Claude Code | Run `claude auth login` to sign in to a Claude subscription. Use **Save sign-in** to keep an account available before signing in to another. YouSage uses the Claude Code sign-in for usage and switching. |
+| Codex | Sign in to Codex on this PC. To connect another ChatGPT account, open **Codex → Details → Add Codex account**. |
+| Antigravity | Install and sign in to the `agy` CLI. The Antigravity detail view shows model quotas and lets you save the current sign-in. |
+| Claude Code | Run `claude auth login` to sign in to your Claude subscription. The Claude detail view lets you save the current sign-in. |
 
-For a missing or stale reading, open **Settings → System → Connection health** to see the last successful check and next retry. Claude usage depends on an internal account endpoint and may be temporarily unavailable after rate limiting or upstream changes.
+Click inside the Detail panel to pin it open. Click outside or press **Esc** to close it. Drag the expanded header to move or dock the notch. Press **Alt+Shift+U** to toggle the notch, **Alt+Shift+N** to cycle its preview, or **Alt+Shift+P** to toggle privacy mode.
 
-In **Settings → Preview → Background tracking**, pause providers you rarely use. Their last readings remain available, and **Refresh usage** checks them on demand. By default, active accounts follow your refresh interval and saved Codex and Antigravity accounts are checked at most once every five minutes in the background.
+## What you can do
 
-## Use the notch
+- **Check allowance at a glance.** See five-hour and weekly readings, Antigravity model quotas, and Claude’s separate Fable weekly allowance when reported. Open **Settings → Preview** to show up to three counters and arrange their positions.
+- **Track coding sessions.** Choose **Enable session status** under **Settings → Preview → Coding sessions** to see which conversations are working, waiting for permission, or finished. Review and approve the new hooks in Codex before starting new sessions. [Session setup notes](docs/development.md#hover-session-status-and-claude-switching)
+- **Switch saved accounts.** Review the affected sessions before switching. Automatic switching is opt-in per subscription and waits for sessions to close by default. The separate force-close option can interrupt tasks and lose unsaved work. [Account switching details](docs/development.md#account-switching)
+- **Review usage trends.** Set allowance and reset alerts, open **History** to see usage and pacing estimates, and choose **Export CSV** to save a copy.
 
-- Rest on the top edge for 200 ms to expand the notch. Clicks on the collapsed bar pass through to the app underneath.
-- Move outside an unpinned panel to minimize it. Click inside the expanded panel to pin it, then click outside or press **Esc** to minimize it. Drag the expanded header to reposition the notch.
-- Press **Alt+Shift+U** to toggle the notch, **Alt+Shift+N** to cycle the preview, or **Alt+Shift+P** to toggle privacy mode.
-- Open **Settings → Preview** to choose one provider or a custom combination. Select **Fable this week** when the Claude account reports that allowance.
+## Help and privacy
 
-### Coding sessions
+For missing or stale readings, open **Settings → System → Connection health**. It shows the last successful check, the next retry, and any available sign-in steps. Claude readings rely on an internal endpoint and can be affected by rate limits or upstream changes. Use **Settings → Preview → Background tracking** to pause a provider and **Refresh** to check it on demand.
 
-In **Settings → Preview → Coding sessions**, select **Enable session status**. YouSage adds observer hooks to Codex, Claude Code, and Antigravity while preserving existing hooks. Review the new hooks in Codex under **Settings → Hooks** or `/hooks`, then start new coding sessions. The notch uses the conversation title when available and falls back to the project name. Some Antigravity app and IDE permission dialogs are outside the events its hooks expose.
+YouSage stores usage history and session status on your PC. Privacy mode masks account and conversation names in the interface and uses generic notifications. Manage history retention under **Settings → System**. [Provider integrations and local data](docs/development.md#integration)
 
-### Account switching
-
-Use the switch action on a saved account and review which sessions need to close. Codex and Antigravity can reopen their desktop apps after switching. Start new terminal sessions to use the chosen sign-in. Claude switching applies to Claude Code.
-
-**Auto switch account** is off by default. Enable it per provider in **Settings → Preview** or **Settings → Alerts**. YouSage requires a fresh 0% reading and a saved account with available allowance in the same quota windows. Account purpose and exclusions apply to the choice.
-
-Automatic switching defaults to **Wait until sessions close**. Choose **Force-close sessions and switch** separately if you accept the risk of interrupting running work or losing unsaved changes. Existing settings require this choice again.
-
-### Local data and privacy
-
-Usage history and session status are stored on your PC. Session observers save status, project names, and available conversation titles without saving prompts or tool arguments. Privacy mode masks account identities and session names in the interface and uses generic notifications. In **Settings → System**, you can adjust history retention, clear history, or export CSV.
-
-Saved Codex sign-ins use Windows Credential Manager, and saved Claude Code sign-ins use Windows user-bound encryption. Antigravity sign-in files live in separate local account folders. Usage refreshes read provider quota data without starting model turns.
+Use [GitHub Issues](https://github.com/yabswannalearn/yousage/issues) for bugs and feature requests. Follow the [security policy](SECURITY.md) to report vulnerabilities privately.
 
 ## Build from source
 
-Install Git, Node.js 22.12 or newer, Rust with the MSVC toolchain, Microsoft C++ Build Tools with the Windows SDK, and WebView2. [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows)
+On Windows, install Git, Node.js 22.12 or newer, Rust 1.90 or newer with the MSVC toolchain, Microsoft C++ Build Tools, the Windows SDK, and WebView2. [Tauri prerequisites for Windows](https://v2.tauri.app/start/prerequisites/#windows)
 
 ```powershell
 git clone https://github.com/yabswannalearn/yousage.git
@@ -73,26 +62,16 @@ npm ci
 npm run tauri dev
 ```
 
-For a browser preview with demo data, run `npm run dev` and open `http://127.0.0.1:1420/?preview=1`. Live account access requires the Windows app.
+Run `npm run build:desktop` for the standalone executable at `src-tauri/target/release/yousage.exe`, or `npm run tauri build` for the NSIS installer under `src-tauri/target/release/bundle/nsis/`.
 
-Run `npm run build:desktop` to build `src-tauri/target/release/yousage.exe`. Run `npm run tauri build` to also package the installer under `src-tauri/target/release/bundle/nsis/`.
+For a local browser preview with sample data, run `npm run dev` and open [the demo at localhost](http://127.0.0.1:1420/?preview=1&expanded=1). Use the Windows app to connect real accounts.
 
 ## Contributing
 
-File bug reports and feature ideas in [GitHub Issues](https://github.com/yabswannalearn/yousage/issues). For a bug, include your Windows version, YouSage version or commit, and steps to reproduce it. Use demo data or privacy mode when sharing screenshots.
-
-Before submitting a pull request, run the checks relevant to your change.
-
-```powershell
-npm test
-npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-For UI changes, install Chromium with `npx playwright install chromium`, start `npm run dev` in a separate terminal, and run `npm run test:ui`. Additional regression checks and integration notes are in the [development notes](docs/development.md). See the [product brief](docs/product-brief.md) and [interface design](docs/design.md) for project context.
+Bug reports, documentation fixes, and pull requests are welcome. The [contribution guide](CONTRIBUTING.md) explains how to report an issue and run the checks. See the [product brief](docs/product-brief.md), [interface design](docs/design.md), and [development notes](docs/development.md) for project context.
 
 ## License and credits
 
-YouSage's source code is dual-licensed under the [MIT License](LICENSE) or [Apache License 2.0](LICENSE-APACHE), at your option.
+YouSage is an independent project. Its source code is dual-licensed under the [MIT License](LICENSE) or [Apache License 2.0](LICENSE-APACHE), at your option. See the [maintainer profile](https://github.com/yabswannalearn) and [project contributors](https://github.com/yabswannalearn/yousage/graphs/contributors).
 
-YouSage is an independent project. The provider marks identify their corresponding usage sources. [ChatGPT favicon](https://chatgpt.com/cdn/assets/favicon-o20kmmos.svg) · [Claude icon](https://claude.com/icon.svg) · [Antigravity press assets](https://antigravity.google/press)
+Provider marks identify their usage sources. [ChatGPT favicon](https://chatgpt.com/cdn/assets/favicon-o20kmmos.svg) · [Claude icon](https://claude.com/icon.svg) · [Antigravity press assets](https://antigravity.google/press)
