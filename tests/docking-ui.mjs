@@ -62,7 +62,7 @@ try {
     assert.equal(Math.round((await root.boundingBox()).width), Math.round(compact.width));
   }
   for (const edge of ['floating', 'top', 'bottom', 'left', 'right']) {
-    await page.goto(`http://127.0.0.1:1420/?preview=1&edge=${edge}`);
+    await page.goto(`http://127.0.0.1:1420/?preview=1&sessions=1&edge=${edge}`);
     const root = page.locator('#app');
     const header = page.locator('#notch-toggle');
     await header.evaluate(el => el.focus());
@@ -70,9 +70,10 @@ try {
     await page.waitForTimeout(470);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     for (const provider of ['codex', 'antigravity', 'claude']) await page.locator(`#preview-${provider}`).check();
+    await page.getByRole('combobox', { name: 'Middle', exact: true }).selectOption('claude');
     await page.locator('#notch-window').selectOption('weekly');
     assert.equal(await header.locator('svg[role=meter]').count(), 3, `${edge} custom preview must include all three providers`);
-    assert.deepEqual(await header.locator('.reading-label').allTextContents(), ['C·Week', 'A·Week', 'Cl·Week']);
+    assert.deepEqual(await header.locator('.reading-label').allTextContents(), ['C·Week', 'Cl·Week', 'A·Week']);
     assert.equal(await page.locator('.settings-panel').evaluate(el => el.scrollWidth <= el.clientWidth), true, `${edge} custom settings must fit`);
     await page.keyboard.press('Escape');
     await page.waitForTimeout(320);
@@ -80,6 +81,9 @@ try {
     // DOM integer dimensions can differ by one pixel when text uses fractional line heights.
     const overflow = await header.locator('.small-reading').evaluateAll(elements => elements.some(el => el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1));
     assert.equal(overflow, false, `${edge} three-provider readings must stay within their bounds`);
+    const axis = ['left', 'right'].includes(edge) ? 'top' : 'left';
+    const positions = await header.locator('.small-reading').evaluateAll((elements, axis) => elements.map(el => el.getBoundingClientRect()[axis]), axis);
+    assert.ok(positions[0] < positions[1] && positions[1] < positions[2], `${edge} renders Claude between the other readings`);
     await root.screenshot({ path: `artifacts/docking/${edge}-three-providers.png` });
     await header.evaluate(el => el.focus());
     await page.keyboard.press('Enter');

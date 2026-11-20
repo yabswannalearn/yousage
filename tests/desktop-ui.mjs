@@ -277,13 +277,17 @@ try {
   assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·5h', 'A·Week'], 'weekly-only AGY fallback must identify its actual window');
   await page.locator('#preview-claude').check();
   assert.equal(await page.locator('.compact .small-reading').count(), 3, 'all three providers can share the notch');
+  await page.getByRole('combobox', { name: 'Middle', exact: true }).selectOption('claude');
+  assert.equal(await page.locator('#notch-position-2').inputValue(), 'antigravity', 'selecting an occupied position swaps the readings');
+  assert.deepEqual(await page.evaluate(() => window.testBridge.snapshot.settings.usagePreferences.notchProviders), ['codex', 'claude', 'antigravity']);
   await page.locator('#notch-window').selectOption('weekly');
-  assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·Week', 'A·Week', 'Cl·Week']);
+  assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·Week', 'Cl·Week', 'A·Week']);
   await page.locator('#show-claude').uncheck();
   assert.equal(await page.locator('.compact .small-reading').count(), 2);
   assert.equal(await page.locator('#preview-claude').isChecked(), true, 'hiding preserves custom provider choices');
   await page.locator('#show-claude').check();
   assert.equal(await page.locator('.compact .small-reading').count(), 3);
+  assert.deepEqual(await page.locator('.compact .reading-label').allTextContents(), ['C·Week', 'Cl·Week', 'A·Week'], 'restoring a hidden provider preserves its position');
   await page.locator('#notch-group').selectOption('gemini');
   await page.locator('#notch-window').selectOption('limiting');
   await page.locator('#warning-codex').fill('35');
